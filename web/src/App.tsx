@@ -4,8 +4,8 @@ import { DashboardPage } from "@/pages/DashboardPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { BrowserPage } from "@/pages/BrowserPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
+import { VideoLibraryPage } from "@/pages/VideoLibraryPage";
 import { ImagesPage } from "@/pages/ImagesPage";
-import { FramesPage } from "@/pages/FramesPage";
 import { QualityPage } from "@/pages/QualityPage";
 import { PeoplePage } from "@/pages/PeoplePage";
 import { ReviewPage } from "@/pages/ReviewPage";
@@ -21,8 +21,8 @@ export default function App() {
         <Route path="/import" element={<ImportPage />} />
         <Route path="/browser" element={<BrowserPage />} />
         <Route path="/downloads" element={<DownloadsPage />} />
+        <Route path="/videos" element={<VideoLibraryPage />} />
         <Route path="/images" element={<ImagesPage />} />
-        <Route path="/frames" element={<FramesPage />} />
         <Route path="/quality" element={<QualityPage />} />
         <Route path="/people" element={<PeoplePage />} />
         <Route path="/review" element={<ReviewPage />} />

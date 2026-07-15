@@ -52,6 +52,19 @@ export const FRAME_COLOR: ColorMap = {
   failed: "error",
 };
 
+export const VIDEO_STATUS_COLOR: ColorMap = {
+  ready: "default",
+  queued: "processing",
+  extracting: "processing",
+  extracted: "success",
+  failed: "error",
+};
+
+export const VIDEO_SOURCE_COLOR: ColorMap = {
+  download: "blue",
+  local: "geekblue",
+};
+
 export const PERSON_COLOR: ColorMap = {
   auto: "default",
   confirmed: "success",

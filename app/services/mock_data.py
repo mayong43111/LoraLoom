@@ -23,6 +23,8 @@ from app.domain.enums import (
     SelectionStatus,
     SubjectType,
     Usability,
+    VideoSourceType,
+    VideoStatus,
 )
 from app.domain.models import (
     DownloadTask,
@@ -35,6 +37,7 @@ from app.domain.models import (
     Selection,
     SelectionItem,
     SelectionRule,
+    Video,
 )
 
 _SEED = 20260715
@@ -216,13 +219,59 @@ def _build_downloads(rng: random.Random) -> list[DownloadTask]:
     ]
 
 
-def _build_frame_jobs(rng: random.Random) -> list[FrameJob]:
+def _build_videos(rng: random.Random) -> list[Video]:
+    """构建视频库。部分来源于下载任务，部分来源于本地导入。"""
+    specs = [
+        # (title, source_type, download_id, status, interval)
+        ("人物访谈-完整版.mp4", VideoSourceType.DOWNLOAD, "dl-000", VideoStatus.EXTRACTED, 1.0),
+        ("外景拍摄-片段01.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTED, 1.0),
+        ("舞台表演-高清.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTING, 0.5),
+        ("直播回放-截取.mp4", VideoSourceType.DOWNLOAD, "dl-001", VideoStatus.READY, 1.0),
+        ("生活记录-手机拍摄.mp4", VideoSourceType.LOCAL, None, VideoStatus.READY, 2.0),
+    ]
+    videos: list[Video] = []
+    for index, (title, source, dl_id, status, interval) in enumerate(specs):
+        duration = rng.choice([42.0, 63.0, 88.0, 120.0, 156.0])
+        width, height = rng.choice([(1920, 1080), (1280, 720), (1080, 1920)])
+        extracted = (
+            int(duration / interval)
+            if status == VideoStatus.EXTRACTED
+            else int(duration / interval * rng.uniform(0.2, 0.6))
+            if status == VideoStatus.EXTRACTING
+            else 0
+        )
+        videos.append(
+            Video(
+                id=f"video-{index:03d}",
+                title=title,
+                source_type=source,
+                path=f"workspace/videos/video-{index:03d}.mp4",
+                duration=duration,
+                width=width,
+                height=height,
+                fps=rng.choice([24.0, 25.0, 30.0]),
+                size_bytes=int(duration * rng.uniform(1.2, 3.5) * 1_000_000),
+                status=status,
+                codec=rng.choice(["h264", "hevc"]),
+                frame_interval=interval,
+                extracted_frame_count=extracted,
+                source_download_id=dl_id,
+                thumbnail_hint=f"video-{index}",
+            )
+        )
+    return videos
+
+
+def _build_frame_jobs(rng: random.Random, videos: list[Video]) -> list[FrameJob]:
+    """为已抽帧/抽帧中的视频生成抽帧任务结果。"""
     jobs: list[FrameJob] = []
-    for index in range(3):
-        duration = rng.choice([42.0, 63.0, 120.0])
+    for video in videos:
+        if video.status not in (VideoStatus.EXTRACTED, VideoStatus.EXTRACTING):
+            continue
         frames: list[FrameResult] = []
         t = 0.0
-        while t < min(duration, 20.0):
+        horizon = min(video.duration, 24.0)
+        while t < horizon:
             roll = rng.random()
             if roll < 0.7:
                 status = FrameStatus.EXTRACTED
@@ -235,7 +284,7 @@ def _build_frame_jobs(rng: random.Random) -> list[FrameJob]:
                 actual = None
             frames.append(
                 FrameResult(
-                    target_timestamp=t,
+                    target_timestamp=round(t, 2),
                     actual_timestamp=actual,
                     status=status,
                     quality_score=(
@@ -244,15 +293,18 @@ def _build_frame_jobs(rng: random.Random) -> list[FrameJob]:
                     image_id=None,
                 )
             )
-            t += 1.0
+            t += video.frame_interval
+        progress = 1.0 if video.status == VideoStatus.EXTRACTED else round(
+            rng.uniform(0.3, 0.7), 2
+        )
         jobs.append(
             FrameJob(
-                id=f"frame-job-{index:03d}",
-                asset_id=f"asset-{index:03d}",
-                video_name=f"video-{index:03d}.mp4",
-                duration=duration,
-                interval=1.0,
-                progress=round(rng.uniform(0.3, 1.0), 2),
+                id=f"frame-job-{video.id}",
+                video_id=video.id,
+                video_name=video.title,
+                duration=video.duration,
+                interval=video.frame_interval,
+                progress=progress,
                 frames=frames,
             )
         )
@@ -309,5 +361,6 @@ class MockDataset:
         self.images = _build_images(rng, self.people)
         self.import_batches = _build_import_batches(rng)
         self.downloads = _build_downloads(rng)
-        self.frame_jobs = _build_frame_jobs(rng)
+        self.videos = _build_videos(rng)
+        self.frame_jobs = _build_frame_jobs(rng, self.videos)
         self.selections = _build_selections(rng, self.people, self.images)

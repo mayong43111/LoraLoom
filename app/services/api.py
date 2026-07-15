@@ -19,6 +19,7 @@ from app.domain.models import (
     ImportBatch,
     PersonCluster,
     Selection,
+    Video,
 )
 
 
@@ -76,6 +77,19 @@ class DatasetService(ABC):
     @abstractmethod
     def list_frame_jobs(self) -> Sequence[FrameJob]:
         """返回抽帧任务列表。"""
+
+    # -- 视频库 -------------------------------------------------------------
+    @abstractmethod
+    def list_videos(self) -> Sequence[Video]:
+        """返回视频库列表。"""
+
+    @abstractmethod
+    def get_video(self, video_id: str) -> Video:
+        """返回单个视频详情。"""
+
+    @abstractmethod
+    def get_video_frame_job(self, video_id: str) -> FrameJob | None:
+        """返回某视频的抄帧结果；尚未抄帧时返回 None。"""
 
     # -- 人物 ---------------------------------------------------------------
     @abstractmethod

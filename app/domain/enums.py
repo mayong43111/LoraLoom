@@ -241,6 +241,37 @@ class FrameStatus(LabeledEnum):
         }
 
 
+class VideoSourceType(LabeledEnum):
+    """视频来源。"""
+
+    DOWNLOAD = "download"
+    LOCAL = "local"
+
+    @classmethod
+    def _labels(cls) -> dict[str, str]:
+        return {"download": "下载", "local": "本地导入"}
+
+
+class VideoStatus(LabeledEnum):
+    """视频在抽帧流水线中的状态。"""
+
+    READY = "ready"
+    QUEUED = "queued"
+    EXTRACTING = "extracting"
+    EXTRACTED = "extracted"
+    FAILED = "failed"
+
+    @classmethod
+    def _labels(cls) -> dict[str, str]:
+        return {
+            "ready": "待抽帧",
+            "queued": "排队中",
+            "extracting": "抽帧中",
+            "extracted": "已抽帧",
+            "failed": "失败",
+        }
+
+
 class PersonStatus(LabeledEnum):
     """人物聚类状态。"""
 

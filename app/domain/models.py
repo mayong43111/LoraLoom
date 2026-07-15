@@ -25,6 +25,8 @@ from app.domain.enums import (
     SelectionStatus,
     SubjectType,
     Usability,
+    VideoSourceType,
+    VideoStatus,
 )
 
 
@@ -219,11 +221,33 @@ class DownloadTask:
 
 
 @dataclass(slots=True)
-class FrameJob:
-    """单个视频的抽帧任务。"""
+class Video:
+    """视频库中的视频。素材来源于下载或本地导入，是抽帧的输入。"""
 
     id: str
-    asset_id: str
+    title: str
+    source_type: VideoSourceType
+    path: str
+    duration: float
+    width: int
+    height: int
+    fps: float
+    size_bytes: int
+    status: VideoStatus = VideoStatus.READY
+    codec: str = "h264"
+    frame_interval: float = 1.0
+    extracted_frame_count: int = 0
+    source_download_id: str | None = None
+    thumbnail_hint: str = ""
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass(slots=True)
+class FrameJob:
+    """单个视频的抽帧任务。作为视频库的子工具结果。"""
+
+    id: str
+    video_id: str
     video_name: str
     duration: float
     interval: float

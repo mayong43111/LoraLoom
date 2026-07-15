@@ -120,6 +120,29 @@ def list_frame_jobs(service: DatasetService = Depends(get_service)) -> Any:
     return to_jsonable(service.list_frame_jobs())
 
 
+# -- 视频库 -----------------------------------------------------------------
+@app.get("/api/videos")
+def list_videos(service: DatasetService = Depends(get_service)) -> Any:
+    return to_jsonable(service.list_videos())
+
+
+@app.get("/api/videos/{video_id}")
+def get_video(
+    video_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        return to_jsonable(service.get_video(video_id))
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/videos/{video_id}/frame-job")
+def get_video_frame_job(
+    video_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    return to_jsonable(service.get_video_frame_job(video_id))
+
+
 # -- 人物 -------------------------------------------------------------------
 @app.get("/api/people")
 def list_people(service: DatasetService = Depends(get_service)) -> Any:

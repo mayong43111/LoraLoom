@@ -103,12 +103,31 @@ export interface FrameResult {
 
 export interface FrameJob {
   id: string;
-  asset_id: string;
+  video_id: string;
   video_name: string;
   duration: number;
   interval: number;
   progress: number;
   frames: FrameResult[];
+}
+
+export interface Video {
+  id: string;
+  title: string;
+  source_type: string;
+  path: string;
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  size_bytes: number;
+  status: string;
+  codec: string;
+  frame_interval: number;
+  extracted_frame_count: number;
+  source_download_id: string | null;
+  thumbnail_hint: string;
+  created_at: string;
 }
 
 export interface SelectionRule {

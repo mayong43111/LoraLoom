@@ -66,6 +66,8 @@ _ENUM_TYPES: tuple[type[enums.LabeledEnum], ...] = (
     enums.DownloadTool,
     enums.DownloadStatus,
     enums.FrameStatus,
+    enums.VideoSourceType,
+    enums.VideoStatus,
     enums.PersonStatus,
     enums.SelectionStatus,
     enums.CaptionOrigin,

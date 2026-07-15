@@ -15,6 +15,7 @@ import type {
   ImportBatch,
   PersonCluster,
   Selection,
+  Video,
 } from "./types";
 
 const API_BASE = "/api";
@@ -69,6 +70,10 @@ export const api = {
     ),
   getImage: (imageId: string) => request<ImageModel>(`/images/${imageId}`),
   listFrameJobs: () => request<FrameJob[]>("/frame-jobs"),
+  listVideos: () => request<Video[]>("/videos"),
+  getVideo: (videoId: string) => request<Video>(`/videos/${videoId}`),
+  getVideoFrameJob: (videoId: string) =>
+    request<FrameJob | null>(`/videos/${videoId}/frame-job`),
   listPeople: () => request<PersonCluster[]>("/people"),
   listReviewQueue: (onlyUnreviewed = true) =>
     request<ImageModel[]>(

@@ -15,6 +15,7 @@ from app.domain.enums import (
     QualityFlag,
     ReviewStatus,
     Usability,
+    VideoStatus,
 )
 from app.domain.models import (
     DatasetStats,
@@ -24,6 +25,7 @@ from app.domain.models import (
     ImportBatch,
     PersonCluster,
     Selection,
+    Video,
 )
 from app.services.api import DatasetService, ImageFilter, ServiceError
 from app.services.mock_data import MockDataset
@@ -35,6 +37,8 @@ class MockDatasetService(DatasetService):
     def __init__(self, dataset: MockDataset | None = None) -> None:
         self._data = dataset or MockDataset()
         self._image_index = {img.id: img for img in self._data.images}
+        self._video_index = {v.id: v for v in self._data.videos}
+        self._frame_job_index = {j.video_id: j for j in self._data.frame_jobs}
 
     # -- Dashboard ----------------------------------------------------------
     def get_stats(self) -> DatasetStats:
@@ -73,8 +77,9 @@ class MockDatasetService(DatasetService):
             orientation_distribution=orientation_dist,
             quality_distribution=quality_dist,
             pending_frame=sum(
-                len([f for f in job.frames if f.status.value == "pending"])
-                for job in self._data.frame_jobs
+                1
+                for v in self._data.videos
+                if v.status in (VideoStatus.READY, VideoStatus.QUEUED)
             ),
             pending_quality=candidate,
             pending_face=sum(1 for i in images if i.person_count == 0),
@@ -140,6 +145,19 @@ class MockDatasetService(DatasetService):
     # -- 抽帧 ---------------------------------------------------------------
     def list_frame_jobs(self) -> Sequence[FrameJob]:
         return list(self._data.frame_jobs)
+
+    # -- 视频库 -------------------------------------------------------------
+    def list_videos(self) -> Sequence[Video]:
+        return list(self._data.videos)
+
+    def get_video(self, video_id: str) -> Video:
+        try:
+            return self._video_index[video_id]
+        except KeyError as exc:  # pragma: no cover - 防御性
+            raise ServiceError(f"视频不存在: {video_id}") from exc
+
+    def get_video_frame_job(self, video_id: str) -> FrameJob | None:
+        return self._frame_job_index.get(video_id)
 
     # -- 人物 ---------------------------------------------------------------
     def list_people(self) -> Sequence[PersonCluster]:
