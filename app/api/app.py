@@ -13,10 +13,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.deps import get_service
 from app.api.serialization import enum_metadata, to_jsonable
@@ -216,6 +219,51 @@ def extract_frames(
         return to_jsonable(service.run_frame_extraction(video_id, interval))
     except ServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# -- 工具集合（外部动态注入） -----------------------------------------------
+# 参考 ComfyUI 的自定义扩展目录：每个外部工具是 external_tools/ 下的一个子目录，
+# 内含 manifest.json（元信息）与已构建的 JS 模块（默认 index.js）。前端查询
+# /api/tools 拿到清单后，用原生动态 import 加载模块（经 /api/tool-assets 静态
+# 服务），模块通过全局 window.DatasetToolkit 自注册。未来可从远端下载工具包
+# 落盘到该目录，前端「刷新扩展」即可注入，无需重构主程序。
+EXTERNAL_TOOLS_DIR = Path(__file__).resolve().parents[2] / "external_tools"
+
+
+@app.get("/api/tools")
+def list_external_tools() -> Any:
+    """扫描外部工具目录，返回可加载的工具清单。"""
+    tools: list[dict[str, Any]] = []
+    if not EXTERNAL_TOOLS_DIR.exists():
+        return tools
+    for folder in sorted(EXTERNAL_TOOLS_DIR.iterdir()):
+        manifest = folder / "manifest.json"
+        if not folder.is_dir() or not manifest.exists():
+            continue
+        try:
+            meta = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue  # 跳过损坏的工具包
+        entry = meta.get("entry", "index.js")
+        tools.append(
+            {
+                "id": meta.get("id", folder.name),
+                "name": meta.get("name", folder.name),
+                "description": meta.get("description", ""),
+                "scopes": meta.get("scopes", ["video"]),
+                "entry": f"/api/tool-assets/{folder.name}/{entry}",
+            }
+        )
+    return tools
+
+
+# 静态服务外部工具资源。挂载在 /api 之下以复用前端 Vite 的 /api 代理。
+EXTERNAL_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/api/tool-assets",
+    StaticFiles(directory=EXTERNAL_TOOLS_DIR),
+    name="tool-assets",
+)
 
 
 # -- 人物 -------------------------------------------------------------------

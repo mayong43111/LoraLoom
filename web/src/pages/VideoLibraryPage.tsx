@@ -10,6 +10,7 @@
 import { useMemo, useState } from "react";
 import {
   App,
+  Alert,
   Breadcrumb,
   Button,
   Card,
@@ -24,6 +25,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Upload,
@@ -31,6 +33,7 @@ import {
 import {
   FolderOutlined,
   HomeOutlined,
+  ReloadOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
@@ -44,7 +47,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EnumTag } from "@/components/EnumTag";
 import { VIDEO_SOURCE_COLOR } from "@/colors";
 import type { Video, VideoFilterParams, VideoGroup } from "@/api/types";
-import { getTools } from "@/tools";
+import { HOST_API_VERSION, useExternalTools, useTools } from "@/tools";
 import type { ToolDefinition } from "@/tools";
 
 const ANY = "__any__";
@@ -312,7 +315,7 @@ function UploadVideoModal({
   );
 }
 
-// -- 工具集合弹窗（卡片式，由工具注册中心驱动） --------------------------
+// -- 工具集合弹窗（卡片式，由工具注册中心驱动，支持外部动态注入） ----------
 function ToolsModal({
   open,
   onClose,
@@ -322,18 +325,75 @@ function ToolsModal({
   onClose: () => void;
   onSelectTool: (tool: ToolDefinition) => void;
 }) {
-  const tools = getTools("video");
+  const tools = useTools("video");
+  const { loading, result, reload } = useExternalTools();
+  const failed = result?.failed.filter((f) => f.id !== "*") ?? [];
+  const manifestError = result?.failed.find((f) => f.id === "*");
+
   return (
     <Modal
-      title="工具集合"
+      title={
+        <Space>
+          工具集合
+          <span style={{ fontSize: 12, color: "#8b90a0", fontWeight: 400 }}>
+            SDK v{HOST_API_VERSION}
+          </span>
+        </Space>
+      }
       open={open}
       onCancel={onClose}
       footer={null}
       width={640}
       destroyOnClose
     >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        <span style={{ fontSize: 12, color: "#8b90a0" }}>
+          {loading ? "正在加载扩展工具…" : `共 ${tools.length} 个工具`}
+        </span>
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={loading}
+          onClick={reload}
+        >
+          刷新扩展
+        </Button>
+      </div>
+
+      {manifestError && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="获取扩展工具清单失败"
+          description={manifestError.error}
+        />
+      )}
+      {failed.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="部分扩展工具加载失败"
+          description={failed.map((f) => `${f.id}: ${f.error}`).join("；")}
+        />
+      )}
+
       {tools.length === 0 ? (
-        <Empty description="暂无可用工具" />
+        loading ? (
+          <div style={{ textAlign: "center", padding: 32 }}>
+            <Spin />
+          </div>
+        ) : (
+          <Empty description="暂无可用工具" />
+        )
       ) : (
         <Row gutter={[16, 16]}>
           {tools.map((tool) => {

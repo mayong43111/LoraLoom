@@ -9,15 +9,32 @@
 import type { ToolDefinition, ToolScope } from "./types";
 
 const registry = new Map<string, ToolDefinition>();
+const listeners = new Set<() => void>();
+
+/** 通知所有订阅者注册表已变化（供 UI 在异步注入后刷新）。 */
+function emit(): void {
+  listeners.forEach((fn) => fn());
+}
+
+/** 订阅注册表变化。返回取消订阅函数。 */
+export function subscribeTools(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 /** 注册一个工具。若 id 已存在则覆盖（便于热更新/重新注入）。 */
 export function registerTool(tool: ToolDefinition): void {
   registry.set(tool.id, { source: "builtin", enabled: true, ...tool });
+  emit();
 }
 
 /** 注销一个工具。返回是否存在并被移除。 */
 export function unregisterTool(id: string): boolean {
-  return registry.delete(id);
+  const removed = registry.delete(id);
+  if (removed) emit();
+  return removed;
 }
 
 /** 获取单个工具定义。 */
