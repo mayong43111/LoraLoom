@@ -134,6 +134,18 @@ def video_from_dict(d: dict[str, Any]) -> models.Video:
         extracted_frame_count=d.get("extracted_frame_count", 0),
         source_download_id=d.get("source_download_id"),
         thumbnail_hint=d.get("thumbnail_hint", ""),
+        group_id=d.get("group_id"),
+        tags=list(d.get("tags", [])),
+        created_at=_dt(d.get("created_at")),
+    )
+
+
+def video_group_from_dict(d: dict[str, Any]) -> models.VideoGroup:
+    return models.VideoGroup(
+        id=d["id"],
+        name=d["name"],
+        description=d.get("description", ""),
+        video_count=d.get("video_count", 0),
         created_at=_dt(d.get("created_at")),
     )
 

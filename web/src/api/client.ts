@@ -16,6 +16,9 @@ import type {
   PersonCluster,
   Selection,
   Video,
+  VideoCreatePayload,
+  VideoFilterParams,
+  VideoGroup,
 } from "./types";
 
 const API_BASE = "/api";
@@ -70,10 +73,29 @@ export const api = {
     ),
   getImage: (imageId: string) => request<ImageModel>(`/images/${imageId}`),
   listFrameJobs: () => request<FrameJob[]>("/frame-jobs"),
-  listVideos: () => request<Video[]>("/videos"),
+  listVideoGroups: () => request<VideoGroup[]>("/video-groups"),
+  createVideoGroup: (payload: { name: string; description?: string }) =>
+    request<VideoGroup>("/video-groups", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  listVideos: (filter: VideoFilterParams = {}) =>
+    request<Video[]>(
+      `/videos${buildQuery(filter as Record<string, string | undefined>)}`,
+    ),
   getVideo: (videoId: string) => request<Video>(`/videos/${videoId}`),
+  createVideo: (payload: VideoCreatePayload) =>
+    request<Video>("/videos", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getVideoFrameJob: (videoId: string) =>
     request<FrameJob | null>(`/videos/${videoId}/frame-job`),
+  extractFrames: (videoId: string, interval: number) =>
+    request<FrameJob>(`/videos/${videoId}/extract-frames`, {
+      method: "POST",
+      body: JSON.stringify({ interval }),
+    }),
   listPeople: () => request<PersonCluster[]>("/people"),
   listReviewQueue: (onlyUnreviewed = true) =>
     request<ImageModel[]>(

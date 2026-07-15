@@ -38,6 +38,7 @@ from app.domain.models import (
     SelectionItem,
     SelectionRule,
     Video,
+    VideoGroup,
 )
 
 _SEED = 20260715
@@ -219,18 +220,49 @@ def _build_downloads(rng: random.Random) -> list[DownloadTask]:
     ]
 
 
-def _build_videos(rng: random.Random) -> list[Video]:
+def _build_video_groups(rng: random.Random) -> list[VideoGroup]:
+    """构建视频分组。"""
+    specs = [
+        ("group-000", "人物访谈", "访谈类长视频"),
+        ("group-001", "外景素材", "外景拍摄的原始片段"),
+        ("group-002", "舞台演出", "舞台/表演相关"),
+        ("group-003", "未分组", "尚未归类的视频"),
+    ]
+    return [
+        VideoGroup(id=gid, name=name, description=desc)
+        for gid, name, desc in specs
+    ]
+
+
+_VIDEO_TAG_POOL = [
+    "室内",
+    "室外",
+    "单人",
+    "多人",
+    "高清",
+    "竖屏",
+    "访谈",
+    "表演",
+    "生活",
+    "夜景",
+]
+
+
+def _build_videos(
+    rng: random.Random, groups: list[VideoGroup]
+) -> list[Video]:
     """构建视频库。部分来源于下载任务，部分来源于本地导入。"""
     specs = [
-        # (title, source_type, download_id, status, interval)
-        ("人物访谈-完整版.mp4", VideoSourceType.DOWNLOAD, "dl-000", VideoStatus.EXTRACTED, 1.0),
-        ("外景拍摄-片段01.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTED, 1.0),
-        ("舞台表演-高清.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTING, 0.5),
-        ("直播回放-截取.mp4", VideoSourceType.DOWNLOAD, "dl-001", VideoStatus.READY, 1.0),
-        ("生活记录-手机拍摄.mp4", VideoSourceType.LOCAL, None, VideoStatus.READY, 2.0),
+        # (title, source_type, download_id, status, interval, group_id)
+        ("人物访谈-完整版.mp4", VideoSourceType.DOWNLOAD, "dl-000", VideoStatus.EXTRACTED, 1.0, "group-000"),
+        ("外景拍摄-片段01.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTED, 1.0, "group-001"),
+        ("舞台表演-高清.mp4", VideoSourceType.LOCAL, None, VideoStatus.EXTRACTING, 0.5, "group-002"),
+        ("直播回放-截取.mp4", VideoSourceType.DOWNLOAD, "dl-001", VideoStatus.READY, 1.0, "group-002"),
+        ("生活记录-手机拍摄.mp4", VideoSourceType.LOCAL, None, VideoStatus.READY, 2.0, "group-003"),
     ]
+    counts: dict[str, int] = {g.id: 0 for g in groups}
     videos: list[Video] = []
-    for index, (title, source, dl_id, status, interval) in enumerate(specs):
+    for index, (title, source, dl_id, status, interval, group_id) in enumerate(specs):
         duration = rng.choice([42.0, 63.0, 88.0, 120.0, 156.0])
         width, height = rng.choice([(1920, 1080), (1280, 720), (1080, 1920)])
         extracted = (
@@ -240,6 +272,8 @@ def _build_videos(rng: random.Random) -> list[Video]:
             if status == VideoStatus.EXTRACTING
             else 0
         )
+        tags = rng.sample(_VIDEO_TAG_POOL, rng.randint(1, 3))
+        counts[group_id] = counts.get(group_id, 0) + 1
         videos.append(
             Video(
                 id=f"video-{index:03d}",
@@ -257,9 +291,61 @@ def _build_videos(rng: random.Random) -> list[Video]:
                 extracted_frame_count=extracted,
                 source_download_id=dl_id,
                 thumbnail_hint=f"video-{index}",
+                group_id=group_id,
+                tags=tags,
             )
         )
+    for group in groups:
+        group.video_count = counts.get(group.id, 0)
     return videos
+
+
+def build_frame_job(
+    video: Video,
+    interval: float,
+    rng: random.Random | None = None,
+    progress: float = 1.0,
+) -> FrameJob:
+    """按给定间隔为单个视频生成一次抽帧结果。
+
+    供抽帧工具（运行时）与样例数据构建复用。``rng`` 缺省时使用非确定性随机源。
+    """
+    rng = rng or random.Random()
+    frames: list[FrameResult] = []
+    t = 0.0
+    horizon = min(video.duration, 24.0)
+    while t < horizon:
+        roll = rng.random()
+        if roll < 0.7:
+            status = FrameStatus.EXTRACTED
+            actual = t
+        elif roll < 0.85:
+            status = FrameStatus.REPLACED_BY_NEIGHBOR
+            actual = round(t + rng.choice([0.2, 0.4]), 1)
+        else:
+            status = FrameStatus.SKIPPED_NO_GOOD_FRAME
+            actual = None
+        frames.append(
+            FrameResult(
+                target_timestamp=round(t, 2),
+                actual_timestamp=actual,
+                status=status,
+                quality_score=(
+                    round(rng.uniform(0.5, 0.95), 3) if actual is not None else None
+                ),
+                image_id=None,
+            )
+        )
+        t += interval
+    return FrameJob(
+        id=f"frame-job-{video.id}",
+        video_id=video.id,
+        video_name=video.title,
+        duration=video.duration,
+        interval=interval,
+        progress=progress,
+        frames=frames,
+    )
 
 
 def _build_frame_jobs(rng: random.Random, videos: list[Video]) -> list[FrameJob]:
@@ -268,46 +354,10 @@ def _build_frame_jobs(rng: random.Random, videos: list[Video]) -> list[FrameJob]
     for video in videos:
         if video.status not in (VideoStatus.EXTRACTED, VideoStatus.EXTRACTING):
             continue
-        frames: list[FrameResult] = []
-        t = 0.0
-        horizon = min(video.duration, 24.0)
-        while t < horizon:
-            roll = rng.random()
-            if roll < 0.7:
-                status = FrameStatus.EXTRACTED
-                actual = t
-            elif roll < 0.85:
-                status = FrameStatus.REPLACED_BY_NEIGHBOR
-                actual = round(t + rng.choice([0.2, 0.4]), 1)
-            else:
-                status = FrameStatus.SKIPPED_NO_GOOD_FRAME
-                actual = None
-            frames.append(
-                FrameResult(
-                    target_timestamp=round(t, 2),
-                    actual_timestamp=actual,
-                    status=status,
-                    quality_score=(
-                        round(rng.uniform(0.5, 0.95), 3) if actual is not None else None
-                    ),
-                    image_id=None,
-                )
-            )
-            t += video.frame_interval
         progress = 1.0 if video.status == VideoStatus.EXTRACTED else round(
             rng.uniform(0.3, 0.7), 2
         )
-        jobs.append(
-            FrameJob(
-                id=f"frame-job-{video.id}",
-                video_id=video.id,
-                video_name=video.title,
-                duration=video.duration,
-                interval=video.frame_interval,
-                progress=progress,
-                frames=frames,
-            )
-        )
+        jobs.append(build_frame_job(video, video.frame_interval, rng, progress))
     return jobs
 
 
@@ -361,6 +411,7 @@ class MockDataset:
         self.images = _build_images(rng, self.people)
         self.import_batches = _build_import_batches(rng)
         self.downloads = _build_downloads(rng)
-        self.videos = _build_videos(rng)
+        self.video_groups = _build_video_groups(rng)
+        self.videos = _build_videos(rng, self.video_groups)
         self.frame_jobs = _build_frame_jobs(rng, self.videos)
         self.selections = _build_selections(rng, self.people, self.images)

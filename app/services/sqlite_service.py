@@ -12,13 +12,16 @@ import json
 import sqlite3
 import threading
 from collections.abc import Sequence
+from uuid import uuid4
 
 from app.domain.enums import (
+    FrameStatus,
     ImageStatus,
     Orientation,
     QualityFlag,
     ReviewStatus,
     Usability,
+    VideoSourceType,
     VideoStatus,
 )
 from app.domain.models import (
@@ -30,10 +33,17 @@ from app.domain.models import (
     PersonCluster,
     Selection,
     Video,
+    VideoGroup,
 )
 from app.services import db, mapping
-from app.services.api import DatasetService, ImageFilter, ServiceError
-from app.services.mock_data import MockDataset
+from app.services.api import (
+    DatasetService,
+    ImageFilter,
+    ServiceError,
+    VideoCreate,
+    VideoFilter,
+)
+from app.services.mock_data import MockDataset, build_frame_job
 
 
 class SqliteDatasetService(DatasetService):
@@ -86,17 +96,26 @@ class SqliteDatasetService(DatasetService):
             ],
         )
         conn.executemany(
-            "INSERT INTO videos (id, status, source_type, created_at, doc) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO videos (id, status, source_type, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             [
                 (
                     v.id,
                     v.status.value,
                     v.source_type.value,
+                    v.group_id,
                     v.created_at.isoformat(),
                     mapping.to_json(v),
                 )
                 for v in data.videos
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO video_groups (id, name, created_at, doc) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (g.id, g.name, g.created_at.isoformat(), mapping.to_json(g))
+                for g in data.video_groups
             ],
         )
         conn.executemany(
@@ -233,17 +252,117 @@ class SqliteDatasetService(DatasetService):
         return [mapping.frame_job_from_dict(self._doc(r)) for r in rows]
 
     # -- 视频库 -------------------------------------------------------------
-    def list_videos(self) -> Sequence[Video]:
+    def list_video_groups(self) -> Sequence[VideoGroup]:
         rows = self._fetchall(
-            "SELECT doc FROM videos ORDER BY created_at DESC, id"
+            "SELECT doc FROM video_groups ORDER BY created_at, id"
         )
-        return [mapping.video_from_dict(self._doc(r)) for r in rows]
+        return [mapping.video_group_from_dict(self._doc(r)) for r in rows]
+
+    def create_video_group(self, name: str, description: str = "") -> VideoGroup:
+        group = VideoGroup(
+            id=f"group-{uuid4().hex[:12]}",
+            name=name,
+            description=description,
+        )
+        self._write(
+            "INSERT INTO video_groups (id, name, created_at, doc) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                group.id,
+                group.name,
+                group.created_at.isoformat(),
+                mapping.to_json(group),
+            ),
+        )
+        return group
+
+    def list_videos(
+        self, video_filter: VideoFilter | None = None
+    ) -> Sequence[Video]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if video_filter is not None:
+            if video_filter.group_id is not None:
+                clauses.append("group_id = ?")
+                params.append(video_filter.group_id)
+            if video_filter.status is not None:
+                clauses.append("status = ?")
+                params.append(video_filter.status)
+            if video_filter.source_type is not None:
+                clauses.append("source_type = ?")
+                params.append(video_filter.source_type)
+
+        sql = "SELECT doc FROM videos"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC, id"
+        rows = self._fetchall(sql, params)
+        videos = [mapping.video_from_dict(self._doc(r)) for r in rows]
+
+        # tag / keyword 在内存中过滤（数据量小、tag 存于 JSON）。
+        if video_filter is not None:
+            if video_filter.tag is not None:
+                videos = [v for v in videos if video_filter.tag in v.tags]
+            if video_filter.keyword:
+                kw = video_filter.keyword.lower()
+                videos = [v for v in videos if kw in v.title.lower()]
+        return videos
 
     def get_video(self, video_id: str) -> Video:
         row = self._fetchone("SELECT doc FROM videos WHERE id = ?", (video_id,))
         if row is None:
             raise ServiceError(f"视频不存在: {video_id}")
         return mapping.video_from_dict(self._doc(row))
+
+    def create_video(self, payload: VideoCreate) -> Video:
+        if payload.group_id is not None:
+            grp = self._fetchone(
+                "SELECT 1 FROM video_groups WHERE id = ?", (payload.group_id,)
+            )
+            if grp is None:
+                raise ServiceError(f"分组不存在: {payload.group_id}")
+        video = Video(
+            id=f"video-{uuid4().hex[:12]}",
+            title=payload.title,
+            source_type=VideoSourceType.LOCAL,
+            path=payload.path or f"workspace/videos/{payload.title}",
+            duration=payload.duration,
+            width=payload.width,
+            height=payload.height,
+            fps=payload.fps,
+            size_bytes=payload.size_bytes,
+            status=VideoStatus.READY,
+            group_id=payload.group_id,
+            tags=list(payload.tags),
+        )
+        self._write(
+            "INSERT INTO videos (id, status, source_type, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                video.id,
+                video.status.value,
+                video.source_type.value,
+                video.group_id,
+                video.created_at.isoformat(),
+                mapping.to_json(video),
+            ),
+        )
+        if payload.group_id is not None:
+            self._bump_group_count(payload.group_id, 1)
+        return video
+
+    def _bump_group_count(self, group_id: str, delta: int) -> None:
+        row = self._fetchone(
+            "SELECT doc FROM video_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            return
+        group = mapping.video_group_from_dict(self._doc(row))
+        group.video_count = max(0, group.video_count + delta)
+        self._write(
+            "UPDATE video_groups SET doc = ? WHERE id = ?",
+            (mapping.to_json(group), group_id),
+        )
 
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:
         row = self._fetchone(
@@ -252,6 +371,29 @@ class SqliteDatasetService(DatasetService):
         if row is None:
             return None
         return mapping.frame_job_from_dict(self._doc(row))
+
+    def run_frame_extraction(self, video_id: str, interval: float) -> FrameJob:
+        video = self.get_video(video_id)
+        job = build_frame_job(video, interval)
+        video.frame_interval = interval
+        video.status = VideoStatus.EXTRACTED
+        video.extracted_frame_count = sum(
+            1 for f in job.frames if f.status != FrameStatus.SKIPPED_NO_GOOD_FRAME
+        )
+        self._write(
+            "UPDATE videos SET status = ?, doc = ? WHERE id = ?",
+            (video.status.value, mapping.to_json(video), video_id),
+        )
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM frame_jobs WHERE video_id = ?", (video_id,)
+            )
+            self._conn.execute(
+                "INSERT INTO frame_jobs (video_id, doc) VALUES (?, ?)",
+                (video_id, mapping.to_json(job)),
+            )
+            self._conn.commit()
+        return job
 
     # -- 人物 ---------------------------------------------------------------
     def list_people(self) -> Sequence[PersonCluster]:

@@ -127,7 +127,39 @@ export interface Video {
   extracted_frame_count: number;
   source_download_id: string | null;
   thumbnail_hint: string;
+  group_id: string | null;
+  tags: string[];
   created_at: string;
+}
+
+export interface VideoGroup {
+  id: string;
+  name: string;
+  description: string;
+  video_count: number;
+  created_at: string;
+}
+
+/** 视频库筛选参数（对应后端 VideoFilter）。 */
+export interface VideoFilterParams {
+  group_id?: string;
+  status?: string;
+  source_type?: string;
+  tag?: string;
+  keyword?: string;
+}
+
+/** 手动上传/登记视频的输入（对应后端 VideoCreate）。 */
+export interface VideoCreatePayload {
+  title: string;
+  group_id?: string | null;
+  tags?: string[];
+  duration?: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  size_bytes?: number;
+  path?: string;
 }
 
 export interface SelectionRule {

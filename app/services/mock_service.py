@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import uuid4
 
 from app.domain.enums import (
+    FrameStatus,
     ImageStatus,
     Orientation,
     QualityFlag,
     ReviewStatus,
     Usability,
+    VideoSourceType,
     VideoStatus,
 )
 from app.domain.models import (
@@ -26,9 +29,21 @@ from app.domain.models import (
     PersonCluster,
     Selection,
     Video,
+    VideoGroup,
 )
-from app.services.api import DatasetService, ImageFilter, ServiceError
-from app.services.mock_data import MockDataset
+from app.services.api import (
+    DatasetService,
+    ImageFilter,
+    ServiceError,
+    VideoCreate,
+    VideoFilter,
+)
+from app.services.mock_data import MockDataset, build_frame_job
+
+
+def _extract_frames(video: Video, interval: float) -> FrameJob:
+    """对视频执行一次抽帧，返回抽帧任务结果。"""
+    return build_frame_job(video, interval)
 
 
 class MockDatasetService(DatasetService):
@@ -38,6 +53,7 @@ class MockDatasetService(DatasetService):
         self._data = dataset or MockDataset()
         self._image_index = {img.id: img for img in self._data.images}
         self._video_index = {v.id: v for v in self._data.videos}
+        self._group_index = {g.id: g for g in self._data.video_groups}
         self._frame_job_index = {j.video_id: j for j in self._data.frame_jobs}
 
     # -- Dashboard ----------------------------------------------------------
@@ -147,8 +163,44 @@ class MockDatasetService(DatasetService):
         return list(self._data.frame_jobs)
 
     # -- 视频库 -------------------------------------------------------------
-    def list_videos(self) -> Sequence[Video]:
-        return list(self._data.videos)
+    def list_video_groups(self) -> Sequence[VideoGroup]:
+        return list(self._data.video_groups)
+
+    def create_video_group(self, name: str, description: str = "") -> VideoGroup:
+        group = VideoGroup(
+            id=f"group-{uuid4().hex[:12]}",
+            name=name,
+            description=description,
+        )
+        self._data.video_groups.append(group)
+        self._group_index[group.id] = group
+        return group
+
+    def list_videos(
+        self, video_filter: VideoFilter | None = None
+    ) -> Sequence[Video]:
+        videos = sorted(
+            self._data.videos, key=lambda v: v.created_at, reverse=True
+        )
+        if video_filter is None:
+            return videos
+        result: list[Video] = []
+        for v in videos:
+            if video_filter.group_id is not None and v.group_id != video_filter.group_id:
+                continue
+            if video_filter.status is not None and v.status.value != video_filter.status:
+                continue
+            if (
+                video_filter.source_type is not None
+                and v.source_type.value != video_filter.source_type
+            ):
+                continue
+            if video_filter.tag is not None and video_filter.tag not in v.tags:
+                continue
+            if video_filter.keyword and video_filter.keyword.lower() not in v.title.lower():
+                continue
+            result.append(v)
+        return result
 
     def get_video(self, video_id: str) -> Video:
         try:
@@ -156,8 +208,48 @@ class MockDatasetService(DatasetService):
         except KeyError as exc:  # pragma: no cover - 防御性
             raise ServiceError(f"视频不存在: {video_id}") from exc
 
+    def create_video(self, payload: VideoCreate) -> Video:
+        if payload.group_id is not None and payload.group_id not in self._group_index:
+            raise ServiceError(f"分组不存在: {payload.group_id}")
+        video = Video(
+            id=f"video-{uuid4().hex[:12]}",
+            title=payload.title,
+            source_type=VideoSourceType.LOCAL,
+            path=payload.path or f"workspace/videos/{payload.title}",
+            duration=payload.duration,
+            width=payload.width,
+            height=payload.height,
+            fps=payload.fps,
+            size_bytes=payload.size_bytes,
+            status=VideoStatus.READY,
+            group_id=payload.group_id,
+            tags=list(payload.tags),
+        )
+        self._data.videos.append(video)
+        self._video_index[video.id] = video
+        if payload.group_id is not None:
+            self._group_index[payload.group_id].video_count += 1
+        return video
+
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:
         return self._frame_job_index.get(video_id)
+
+    def run_frame_extraction(self, video_id: str, interval: float) -> FrameJob:
+        video = self.get_video(video_id)
+        job = _extract_frames(video, interval)
+        video.frame_interval = interval
+        video.status = VideoStatus.EXTRACTED
+        video.extracted_frame_count = sum(
+            1 for f in job.frames if f.status != FrameStatus.SKIPPED_NO_GOOD_FRAME
+        )
+        self._frame_job_index[video_id] = job
+        existing = next(
+            (j for j in self._data.frame_jobs if j.video_id == video_id), None
+        )
+        if existing is not None:
+            self._data.frame_jobs.remove(existing)
+        self._data.frame_jobs.append(job)
+        return job
 
     # -- 人物 ---------------------------------------------------------------
     def list_people(self) -> Sequence[PersonCluster]:

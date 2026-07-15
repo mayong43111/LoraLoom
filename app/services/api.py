@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.domain.enums import Orientation, ReviewStatus, Usability
 from app.domain.models import (
@@ -20,6 +20,7 @@ from app.domain.models import (
     PersonCluster,
     Selection,
     Video,
+    VideoGroup,
 )
 
 
@@ -40,6 +41,33 @@ class ImageFilter:
     review_status: ReviewStatus | None = None
     quality_flag: str | None = None
     keyword: str | None = None
+
+
+@dataclass(slots=True)
+class VideoFilter:
+    """视频库筛选条件。所有字段可选，``None`` 表示不限制。"""
+
+    group_id: str | None = None
+    status: str | None = None
+    source_type: str | None = None
+    tag: str | None = None
+    keyword: str | None = None
+
+
+@dataclass(slots=True)
+class VideoCreate:
+    """手动上传/登记视频时的输入。"""
+
+    title: str
+    group_id: str | None = None
+    tags: list[str] = field(default_factory=list)
+    duration: float = 0.0
+    width: int = 0
+    height: int = 0
+    fps: float = 25.0
+    size_bytes: int = 0
+    path: str = ""
+
 
 
 class DatasetService(ABC):
@@ -80,16 +108,34 @@ class DatasetService(ABC):
 
     # -- 视频库 -------------------------------------------------------------
     @abstractmethod
-    def list_videos(self) -> Sequence[Video]:
-        """返回视频库列表。"""
+    def list_video_groups(self) -> Sequence[VideoGroup]:
+        """返回视频分组列表。"""
+
+    @abstractmethod
+    def create_video_group(self, name: str, description: str = "") -> VideoGroup:
+        """新建视频分组，返回创建后的分组。"""
+
+    @abstractmethod
+    def list_videos(
+        self, video_filter: "VideoFilter | None" = None
+    ) -> Sequence[Video]:
+        """按筛选条件返回视频库列表。"""
 
     @abstractmethod
     def get_video(self, video_id: str) -> Video:
         """返回单个视频详情。"""
 
     @abstractmethod
+    def create_video(self, payload: "VideoCreate") -> Video:
+        """手动登记/上传一个本地视频，返回创建后的视频。"""
+
+    @abstractmethod
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:
-        """返回某视频的抄帧结果；尚未抄帧时返回 None。"""
+        """返回某视频的抽帧结果；尚未抽帧时返回 None。"""
+
+    @abstractmethod
+    def run_frame_extraction(self, video_id: str, interval: float) -> FrameJob:
+        """对指定视频执行抽帧工具，返回生成的抽帧任务结果。"""
 
     # -- 人物 ---------------------------------------------------------------
     @abstractmethod

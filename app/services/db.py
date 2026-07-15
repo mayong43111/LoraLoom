@@ -29,10 +29,19 @@ CREATE TABLE IF NOT EXISTS videos (
     id          TEXT PRIMARY KEY,
     status      TEXT NOT NULL,
     source_type TEXT NOT NULL,
+    group_id    TEXT,
     created_at  TEXT NOT NULL,
     doc         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
+CREATE INDEX IF NOT EXISTS idx_videos_group ON videos(group_id);
+
+CREATE TABLE IF NOT EXISTS video_groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS frame_jobs (
     video_id TEXT PRIMARY KEY,

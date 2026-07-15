@@ -221,6 +221,17 @@ class DownloadTask:
 
 
 @dataclass(slots=True)
+class VideoGroup:
+    """视频分组。用于在视频库中对视频进行归类管理。"""
+
+    id: str
+    name: str
+    description: str = ""
+    video_count: int = 0
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass(slots=True)
 class Video:
     """视频库中的视频。素材来源于下载或本地导入，是抽帧的输入。"""
 
@@ -239,6 +250,8 @@ class Video:
     extracted_frame_count: int = 0
     source_download_id: str | None = None
     thumbnail_hint: str = ""
+    group_id: str | None = None
+    tags: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
 
 

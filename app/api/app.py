@@ -21,7 +21,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.deps import get_service
 from app.api.serialization import enum_metadata, to_jsonable
 from app.domain.enums import Orientation, ReviewStatus, Usability
-from app.services.api import DatasetService, ImageFilter, ServiceError
+from app.services.api import (
+    DatasetService,
+    ImageFilter,
+    ServiceError,
+    VideoCreate,
+    VideoFilter,
+)
 
 app = FastAPI(
     title="ImagesDataset API",
@@ -121,9 +127,63 @@ def list_frame_jobs(service: DatasetService = Depends(get_service)) -> Any:
 
 
 # -- 视频库 -----------------------------------------------------------------
+@app.get("/api/video-groups")
+def list_video_groups(service: DatasetService = Depends(get_service)) -> Any:
+    return to_jsonable(service.list_video_groups())
+
+
+@app.post("/api/video-groups", status_code=201)
+def create_video_group(
+    payload: dict[str, Any], service: DatasetService = Depends(get_service)
+) -> Any:
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
+    group = service.create_video_group(name, payload.get("description", ""))
+    return to_jsonable(group)
+
+
 @app.get("/api/videos")
-def list_videos(service: DatasetService = Depends(get_service)) -> Any:
-    return to_jsonable(service.list_videos())
+def list_videos(
+    service: DatasetService = Depends(get_service),
+    group_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    source_type: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+) -> Any:
+    video_filter = VideoFilter(
+        group_id=group_id or None,
+        status=status or None,
+        source_type=source_type or None,
+        tag=tag or None,
+        keyword=keyword or None,
+    )
+    return to_jsonable(service.list_videos(video_filter))
+
+
+@app.post("/api/videos", status_code=201)
+def create_video(
+    payload: dict[str, Any], service: DatasetService = Depends(get_service)
+) -> Any:
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="视频名称不能为空")
+    create = VideoCreate(
+        title=title,
+        group_id=payload.get("group_id") or None,
+        tags=list(payload.get("tags", [])),
+        duration=float(payload.get("duration", 0) or 0),
+        width=int(payload.get("width", 0) or 0),
+        height=int(payload.get("height", 0) or 0),
+        fps=float(payload.get("fps", 25) or 25),
+        size_bytes=int(payload.get("size_bytes", 0) or 0),
+        path=payload.get("path", ""),
+    )
+    try:
+        return to_jsonable(service.create_video(create))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/videos/{video_id}")
@@ -141,6 +201,21 @@ def get_video_frame_job(
     video_id: str, service: DatasetService = Depends(get_service)
 ) -> Any:
     return to_jsonable(service.get_video_frame_job(video_id))
+
+
+@app.post("/api/videos/{video_id}/extract-frames")
+def extract_frames(
+    video_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    interval = float(payload.get("interval", 1.0) or 1.0)
+    if interval <= 0:
+        raise HTTPException(status_code=400, detail="抽帧间隔必须大于 0")
+    try:
+        return to_jsonable(service.run_frame_extraction(video_id, interval))
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # -- 人物 -------------------------------------------------------------------
