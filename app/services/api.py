@@ -16,6 +16,7 @@ from app.domain.models import (
     DownloadTask,
     FrameJob,
     Image,
+    ImageGroup,
     ImportBatch,
     PersonCluster,
     Selection,
@@ -40,7 +41,21 @@ class ImageFilter:
     usability: Usability | None = None
     review_status: ReviewStatus | None = None
     quality_flag: str | None = None
+    group_id: str | None = None
+    tag: str | None = None
     keyword: str | None = None
+
+
+@dataclass(slots=True)
+class ImageCreate:
+    """手动上传/登记图片时的输入。"""
+
+    title: str
+    group_id: str | None = None
+    tags: list[str] = field(default_factory=list)
+    width: int = 0
+    height: int = 0
+    path: str = ""
 
 
 @dataclass(slots=True)
@@ -94,12 +109,24 @@ class DatasetService(ABC):
 
     # -- 图片库 -------------------------------------------------------------
     @abstractmethod
+    def list_image_groups(self) -> Sequence[ImageGroup]:
+        """返回图片分组列表。"""
+
+    @abstractmethod
+    def create_image_group(self, name: str, description: str = "") -> ImageGroup:
+        """新建图片分组，返回创建后的分组。"""
+
+    @abstractmethod
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
         """按筛选条件返回图片列表。"""
 
     @abstractmethod
     def get_image(self, image_id: str) -> Image:
         """返回单张图片详情。"""
+
+    @abstractmethod
+    def create_image(self, payload: "ImageCreate") -> Image:
+        """手动登记/上传一张本地图片，返回创建后的图片。"""
 
     # -- 抽帧 ---------------------------------------------------------------
     @abstractmethod

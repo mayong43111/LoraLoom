@@ -26,6 +26,7 @@ from app.api.serialization import enum_metadata, to_jsonable
 from app.domain.enums import Orientation, ReviewStatus, Usability
 from app.services.api import (
     DatasetService,
+    ImageCreate,
     ImageFilter,
     ServiceError,
     VideoCreate,
@@ -92,6 +93,22 @@ def list_downloads(service: DatasetService = Depends(get_service)) -> Any:
 
 
 # -- 图片库 -----------------------------------------------------------------
+@app.get("/api/image-groups")
+def list_image_groups(service: DatasetService = Depends(get_service)) -> Any:
+    return to_jsonable(service.list_image_groups())
+
+
+@app.post("/api/image-groups", status_code=201)
+def create_image_group(
+    payload: dict[str, Any], service: DatasetService = Depends(get_service)
+) -> Any:
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
+    group = service.create_image_group(name, payload.get("description", ""))
+    return to_jsonable(group)
+
+
 @app.get("/api/images")
 def list_images(
     service: DatasetService = Depends(get_service),
@@ -100,6 +117,8 @@ def list_images(
     usability: str | None = Query(default=None),
     review_status: str | None = Query(default=None),
     quality_flag: str | None = Query(default=None),
+    group_id: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
 ) -> Any:
     image_filter = ImageFilter(
@@ -108,9 +127,32 @@ def list_images(
         usability=_parse_enum(Usability, usability),
         review_status=_parse_enum(ReviewStatus, review_status),
         quality_flag=quality_flag or None,
+        group_id=group_id or None,
+        tag=tag or None,
         keyword=keyword or None,
     )
     return to_jsonable(service.list_images(image_filter))
+
+
+@app.post("/api/images", status_code=201)
+def create_image(
+    payload: dict[str, Any], service: DatasetService = Depends(get_service)
+) -> Any:
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="图片名称不能为空")
+    create = ImageCreate(
+        title=title,
+        group_id=payload.get("group_id") or None,
+        tags=list(payload.get("tags", [])),
+        width=int(payload.get("width", 0) or 0),
+        height=int(payload.get("height", 0) or 0),
+        path=payload.get("path", ""),
+    )
+    try:
+        return to_jsonable(service.create_image(create))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/images/{image_id}")

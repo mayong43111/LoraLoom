@@ -10,22 +10,16 @@
 import { useMemo, useState } from "react";
 import {
   App,
-  Alert,
   Breadcrumb,
   Button,
-  Card,
-  Col,
   Descriptions,
   Drawer,
-  Empty,
   Form,
   Input,
   InputNumber,
   Modal,
-  Row,
   Select,
   Space,
-  Spin,
   Table,
   Tag,
   Upload,
@@ -33,7 +27,6 @@ import {
 import {
   FolderOutlined,
   HomeOutlined,
-  ReloadOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
@@ -47,7 +40,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EnumTag } from "@/components/EnumTag";
 import { VIDEO_SOURCE_COLOR } from "@/colors";
 import type { Video, VideoFilterParams, VideoGroup } from "@/api/types";
-import { HOST_API_VERSION, useExternalTools, useTools } from "@/tools";
+import { ToolsModal } from "@/tools";
 import type { ToolDefinition } from "@/tools";
 
 const ANY = "__any__";
@@ -311,129 +304,6 @@ function UploadVideoModal({
           </Form.Item>
         </Space>
       </Form>
-    </Modal>
-  );
-}
-
-// -- 工具集合弹窗（卡片式，由工具注册中心驱动，支持外部动态注入） ----------
-function ToolsModal({
-  open,
-  onClose,
-  onSelectTool,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSelectTool: (tool: ToolDefinition) => void;
-}) {
-  const tools = useTools("video");
-  const { loading, result, reload } = useExternalTools();
-  const failed = result?.failed.filter((f) => f.id !== "*") ?? [];
-  const manifestError = result?.failed.find((f) => f.id === "*");
-
-  return (
-    <Modal
-      title={
-        <Space>
-          工具集合
-          <span style={{ fontSize: 12, color: "#8b90a0", fontWeight: 400 }}>
-            SDK v{HOST_API_VERSION}
-          </span>
-        </Space>
-      }
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      width={640}
-      destroyOnClose
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <span style={{ fontSize: 12, color: "#8b90a0" }}>
-          {loading ? "正在加载扩展工具…" : `共 ${tools.length} 个工具`}
-        </span>
-        <Button
-          size="small"
-          icon={<ReloadOutlined />}
-          loading={loading}
-          onClick={reload}
-        >
-          刷新扩展
-        </Button>
-      </div>
-
-      {manifestError && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="获取扩展工具清单失败"
-          description={manifestError.error}
-        />
-      )}
-      {failed.length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="部分扩展工具加载失败"
-          description={failed.map((f) => `${f.id}: ${f.error}`).join("；")}
-        />
-      )}
-
-      {tools.length === 0 ? (
-        loading ? (
-          <div style={{ textAlign: "center", padding: 32 }}>
-            <Spin />
-          </div>
-        ) : (
-          <Empty description="暂无可用工具" />
-        )
-      ) : (
-        <Row gutter={[16, 16]}>
-          {tools.map((tool) => {
-            const disabled = tool.enabled === false;
-            return (
-              <Col key={tool.id} xs={24} sm={12}>
-                <Card
-                  hoverable={!disabled}
-                  onClick={() => !disabled && onSelectTool(tool)}
-                  style={{
-                    height: "100%",
-                    opacity: disabled ? 0.5 : 1,
-                    cursor: disabled ? "not-allowed" : "pointer",
-                  }}
-                  styles={{ body: { padding: 16 } }}
-                >
-                  <Space align="start" size={12}>
-                    <span style={{ fontSize: 28, color: "#4c8dff" }}>
-                      {tool.icon}
-                    </span>
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                        {tool.name}
-                        {tool.source === "external" && (
-                          <Tag color="purple" style={{ marginLeft: 8 }}>
-                            扩展
-                          </Tag>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#8b90a0" }}>
-                        {tool.description}
-                      </div>
-                    </div>
-                  </Space>
-                </Card>
-              </Col>
-            );
-          })}
-        </Row>
-      )}
     </Modal>
   );
 }
@@ -716,6 +586,7 @@ export function VideoLibraryPage() {
       <ToolsModal
         open={toolsModalOpen}
         onClose={() => setToolsModalOpen(false)}
+        scope="video"
         onSelectTool={(tool) => {
           setToolsModalOpen(false);
           setActiveTool(tool);

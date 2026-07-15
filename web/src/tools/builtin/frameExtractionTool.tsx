@@ -59,7 +59,10 @@ function FrameExtractionModal({ open, onClose, context }: ToolLaunchProps) {
             showSearch
             placeholder="选择要抽帧的视频"
             optionFilterProp="label"
-            options={context.videos.map((v) => ({ value: v.id, label: v.title }))}
+            options={(context.videos ?? []).map((v) => ({
+              value: v.id,
+              label: v.title,
+            }))}
           />
         </Form.Item>
         <Form.Item name="interval" label="抽帧间隔(秒)" initialValue={1.0}>

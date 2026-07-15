@@ -25,6 +25,7 @@ from app.domain.models import (
     DownloadTask,
     FrameJob,
     Image,
+    ImageGroup,
     ImportBatch,
     PersonCluster,
     Selection,
@@ -33,6 +34,7 @@ from app.domain.models import (
 )
 from app.services.api import (
     DatasetService,
+    ImageCreate,
     ImageFilter,
     ServiceError,
     VideoCreate,
@@ -52,6 +54,7 @@ class MockDatasetService(DatasetService):
     def __init__(self, dataset: MockDataset | None = None) -> None:
         self._data = dataset or MockDataset()
         self._image_index = {img.id: img for img in self._data.images}
+        self._image_group_index = {g.id: g for g in self._data.image_groups}
         self._video_index = {v.id: v for v in self._data.videos}
         self._group_index = {g.id: g for g in self._data.video_groups}
         self._frame_job_index = {j.video_id: j for j in self._data.frame_jobs}
@@ -113,8 +116,23 @@ class MockDatasetService(DatasetService):
         return list(self._data.downloads)
 
     # -- 图片库 -------------------------------------------------------------
+    def list_image_groups(self) -> Sequence[ImageGroup]:
+        return list(self._data.image_groups)
+
+    def create_image_group(self, name: str, description: str = "") -> ImageGroup:
+        group = ImageGroup(
+            id=f"img-group-{uuid4().hex[:12]}",
+            name=name,
+            description=description,
+        )
+        self._data.image_groups.append(group)
+        self._image_group_index[group.id] = group
+        return group
+
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
-        images: Sequence[Image] = self._data.images
+        images: Sequence[Image] = sorted(
+            self._data.images, key=lambda i: i.created_at, reverse=True
+        )
         if image_filter is None:
             return list(images)
 
@@ -145,8 +163,16 @@ class MockDatasetService(DatasetService):
             ):
                 continue
             if (
+                image_filter.group_id is not None
+                and img.group_id != image_filter.group_id
+            ):
+                continue
+            if image_filter.tag is not None and image_filter.tag not in img.tags:
+                continue
+            if (
                 image_filter.keyword
                 and image_filter.keyword.lower() not in img.id.lower()
+                and image_filter.keyword.lower() not in img.title.lower()
             ):
                 continue
             result.append(img)
@@ -157,6 +183,34 @@ class MockDatasetService(DatasetService):
             return self._image_index[image_id]
         except KeyError as exc:  # pragma: no cover - 防御性
             raise ServiceError(f"图片不存在: {image_id}") from exc
+
+    def create_image(self, payload: ImageCreate) -> Image:
+        if (
+            payload.group_id is not None
+            and payload.group_id not in self._image_group_index
+        ):
+            raise ServiceError(f"分组不存在: {payload.group_id}")
+        image = Image(
+            id=f"img-{uuid4().hex[:12]}",
+            image_path=payload.path or f"workspace/images/{payload.title}",
+            sha256=f"{uuid4().int & ((1 << 64) - 1):016x}",
+            width=payload.width,
+            height=payload.height,
+            quality_score=0.0,
+            orientation=Orientation.UNKNOWN,
+            usability=Usability.NEEDS_REVIEW,
+            review_status=ReviewStatus.AUTO,
+            status=ImageStatus.NEW,
+            title=payload.title,
+            group_id=payload.group_id,
+            tags=list(payload.tags),
+            thumbnail_hint=payload.title,
+        )
+        self._data.images.append(image)
+        self._image_index[image.id] = image
+        if payload.group_id is not None:
+            self._image_group_index[payload.group_id].image_count += 1
+        return image
 
     # -- 抽帧 ---------------------------------------------------------------
     def list_frame_jobs(self) -> Sequence[FrameJob]:

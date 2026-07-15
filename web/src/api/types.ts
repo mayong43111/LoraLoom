@@ -65,6 +65,10 @@ export interface ImageModel {
   frame_target_timestamp: number | null;
   frame_actual_timestamp: number | null;
   thumbnail_hint: string;
+  title: string;
+  group_id: string | null;
+  tags: string[];
+  created_at: string;
 }
 
 export interface PersonCluster {
@@ -200,7 +204,27 @@ export interface ImageFilterParams {
   usability?: string;
   review_status?: string;
   quality_flag?: string;
+  group_id?: string;
+  tag?: string;
   keyword?: string;
+}
+
+export interface ImageGroup {
+  id: string;
+  name: string;
+  description: string;
+  image_count: number;
+  created_at: string;
+}
+
+/** 手动上传/登记图片的输入（对应后端 ImageCreate）。 */
+export interface ImageCreatePayload {
+  title: string;
+  group_id?: string | null;
+  tags?: string[];
+  width?: number;
+  height?: number;
+  path?: string;
 }
 
 /** 单个枚举成员的元信息。 */

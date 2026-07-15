@@ -73,6 +73,17 @@ class QualityMetrics:
 
 
 @dataclass(slots=True)
+class ImageGroup:
+    """图片分组。用于在图片库中对图片进行文件夹式归类管理。"""
+
+    id: str
+    name: str
+    description: str = ""
+    image_count: int = 0
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass(slots=True)
 class Image:
     """数据集核心对象。对应 DESIGN.md 6.3。"""
 
@@ -96,6 +107,10 @@ class Image:
     frame_target_timestamp: float | None = None
     frame_actual_timestamp: float | None = None
     thumbnail_hint: str = ""  # mock 环境下用于生成占位缩略图的种子
+    title: str = ""
+    group_id: str | None = None
+    tags: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.now)
 
 
 @dataclass(slots=True)

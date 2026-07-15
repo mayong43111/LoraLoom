@@ -10,7 +10,7 @@ import os
 import tempfile
 
 from app.domain.enums import Orientation, ReviewStatus, Usability, VideoStatus
-from app.services.api import ImageFilter, VideoCreate, VideoFilter
+from app.services.api import ImageCreate, ImageFilter, VideoCreate, VideoFilter
 from app.services.sqlite_service import SqliteDatasetService
 
 
@@ -117,4 +117,44 @@ def test_run_frame_extraction_updates_video() -> None:
     assert job.video_id == ready.id
     assert service.get_video(ready.id).status == VideoStatus.EXTRACTED
     assert service.get_video_frame_job(ready.id) is not None
+
+
+def test_image_groups_seeded_with_counts() -> None:
+    service, _ = _service()
+    groups = service.list_image_groups()
+    assert len(groups) == 4
+    total = sum(g.image_count for g in groups)
+    assert total == len(service.list_images())
+
+
+def test_filter_images_by_group_and_tag() -> None:
+    service, _ = _service()
+    images = service.list_images()
+    a_group = next(i.group_id for i in images if i.group_id)
+    by_group = service.list_images(ImageFilter(group_id=a_group))
+    assert by_group and all(i.group_id == a_group for i in by_group)
+
+    a_tag = next(t for i in images for t in i.tags)
+    by_tag = service.list_images(ImageFilter(tag=a_tag))
+    assert by_tag and all(a_tag in i.tags for i in by_tag)
+
+
+def test_create_image_group_and_image_persist() -> None:
+    service, path = _service()
+    group = service.create_image_group("测试图片分组", "desc")
+    image = service.create_image(
+        ImageCreate(
+            title="手动上传.jpg",
+            group_id=group.id,
+            tags=["正面", "单人"],
+            width=1024,
+            height=1024,
+        )
+    )
+    reopened = SqliteDatasetService(path)
+    stored = reopened.get_image(image.id)
+    assert stored.group_id == group.id
+    assert stored.tags == ["正面", "单人"]
+    assert stored.title == "手动上传.jpg"
+    assert any(g.id == group.id for g in reopened.list_image_groups())
 

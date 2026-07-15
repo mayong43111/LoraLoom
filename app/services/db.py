@@ -18,12 +18,22 @@ CREATE TABLE IF NOT EXISTS images (
     review_status      TEXT NOT NULL,
     primary_subject_id TEXT,
     quality_score      REAL NOT NULL,
+    group_id           TEXT,
+    created_at         TEXT NOT NULL,
     doc                TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_images_orientation ON images(orientation);
 CREATE INDEX IF NOT EXISTS idx_images_usability ON images(usability);
 CREATE INDEX IF NOT EXISTS idx_images_review ON images(review_status);
 CREATE INDEX IF NOT EXISTS idx_images_subject ON images(primary_subject_id);
+CREATE INDEX IF NOT EXISTS idx_images_group ON images(group_id);
+
+CREATE TABLE IF NOT EXISTS image_groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS videos (
     id          TEXT PRIMARY KEY,

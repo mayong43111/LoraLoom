@@ -14,6 +14,7 @@
 import { installHostSDK } from "./host";
 import { registerTool } from "./registry";
 import { frameExtractionTool } from "./builtin/frameExtractionTool";
+import { imageStatsTool } from "./builtin/imageStatsTool";
 
 // 必须在任何外部工具加载前安装宿主 SDK。
 installHostSDK();
@@ -21,6 +22,7 @@ installHostSDK();
 /** 注册全部内置工具。幂等：重复调用不会产生重复项。 */
 export function registerBuiltinTools(): void {
   registerTool(frameExtractionTool);
+  registerTool(imageStatsTool);
 }
 
 // 模块加载即注册内置工具，宿主 import 本模块后即可查询。
@@ -39,3 +41,4 @@ export type { ExternalToolManifest, ExternalLoadResult } from "./loader";
 export { useTools, useExternalTools } from "./hooks";
 export type { ExternalToolsState } from "./hooks";
 export { installHostSDK, HOST_API_VERSION } from "./host";
+export { ToolsModal } from "./ToolsModal";

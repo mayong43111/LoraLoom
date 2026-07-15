@@ -29,6 +29,7 @@ from app.domain.models import (
     DownloadTask,
     FrameJob,
     Image,
+    ImageGroup,
     ImportBatch,
     PersonCluster,
     Selection,
@@ -38,6 +39,7 @@ from app.domain.models import (
 from app.services import db, mapping
 from app.services.api import (
     DatasetService,
+    ImageCreate,
     ImageFilter,
     ServiceError,
     VideoCreate,
@@ -81,7 +83,8 @@ class SqliteDatasetService(DatasetService):
         conn.executemany(
             "INSERT INTO images "
             "(id, orientation, usability, review_status, primary_subject_id, "
-            "quality_score, doc) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "quality_score, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     img.id,
@@ -90,9 +93,19 @@ class SqliteDatasetService(DatasetService):
                     img.review_status.value,
                     img.primary_subject_id,
                     img.quality_score,
+                    img.group_id,
+                    img.created_at.isoformat(),
                     mapping.to_json(img),
                 )
                 for img in data.images
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO image_groups (id, name, created_at, doc) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (g.id, g.name, g.created_at.isoformat(), mapping.to_json(g))
+                for g in data.image_groups
             ],
         )
         conn.executemany(
@@ -203,6 +216,30 @@ class SqliteDatasetService(DatasetService):
         return [mapping.download_from_dict(self._doc(r)) for r in rows]
 
     # -- 图片库 -------------------------------------------------------------
+    def list_image_groups(self) -> Sequence[ImageGroup]:
+        rows = self._fetchall(
+            "SELECT doc FROM image_groups ORDER BY created_at, id"
+        )
+        return [mapping.image_group_from_dict(self._doc(r)) for r in rows]
+
+    def create_image_group(self, name: str, description: str = "") -> ImageGroup:
+        group = ImageGroup(
+            id=f"img-group-{uuid4().hex[:12]}",
+            name=name,
+            description=description,
+        )
+        self._write(
+            "INSERT INTO image_groups (id, name, created_at, doc) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                group.id,
+                group.name,
+                group.created_at.isoformat(),
+                mapping.to_json(group),
+            ),
+        )
+        return group
+
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
         clauses: list[str] = []
         params: list[object] = []
@@ -219,15 +256,18 @@ class SqliteDatasetService(DatasetService):
             if image_filter.review_status is not None:
                 clauses.append("review_status = ?")
                 params.append(image_filter.review_status.value)
+            if image_filter.group_id is not None:
+                clauses.append("group_id = ?")
+                params.append(image_filter.group_id)
 
         sql = "SELECT doc FROM images"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY id"
+        sql += " ORDER BY created_at DESC, id"
         rows = self._fetchall(sql, params)
         images = [mapping.image_from_dict(self._doc(r)) for r in rows]
 
-        # 非索引维度在内存中过滤（数据量小）。
+        # 非索引维度在内存中过滤（数据量小、tag 存于 JSON）。
         if image_filter is not None:
             if image_filter.quality_flag is not None:
                 images = [
@@ -235,9 +275,13 @@ class SqliteDatasetService(DatasetService):
                     for i in images
                     if any(f.value == image_filter.quality_flag for f in i.quality_flags)
                 ]
+            if image_filter.tag is not None:
+                images = [i for i in images if image_filter.tag in i.tags]
             if image_filter.keyword:
                 kw = image_filter.keyword.lower()
-                images = [i for i in images if kw in i.id.lower()]
+                images = [
+                    i for i in images if kw in i.id.lower() or kw in i.title.lower()
+                ]
         return images
 
     def get_image(self, image_id: str) -> Image:
@@ -245,6 +289,63 @@ class SqliteDatasetService(DatasetService):
         if row is None:
             raise ServiceError(f"图片不存在: {image_id}")
         return mapping.image_from_dict(self._doc(row))
+
+    def create_image(self, payload: ImageCreate) -> Image:
+        if payload.group_id is not None:
+            grp = self._fetchone(
+                "SELECT 1 FROM image_groups WHERE id = ?", (payload.group_id,)
+            )
+            if grp is None:
+                raise ServiceError(f"分组不存在: {payload.group_id}")
+        image = Image(
+            id=f"img-{uuid4().hex[:12]}",
+            image_path=payload.path or f"workspace/images/{payload.title}",
+            sha256=f"{uuid4().int & ((1 << 64) - 1):016x}",
+            width=payload.width,
+            height=payload.height,
+            quality_score=0.0,
+            orientation=Orientation.UNKNOWN,
+            usability=Usability.NEEDS_REVIEW,
+            review_status=ReviewStatus.AUTO,
+            status=ImageStatus.NEW,
+            title=payload.title,
+            group_id=payload.group_id,
+            tags=list(payload.tags),
+            thumbnail_hint=payload.title,
+        )
+        self._write(
+            "INSERT INTO images "
+            "(id, orientation, usability, review_status, primary_subject_id, "
+            "quality_score, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                image.id,
+                image.orientation.value,
+                image.usability.value,
+                image.review_status.value,
+                image.primary_subject_id,
+                image.quality_score,
+                image.group_id,
+                image.created_at.isoformat(),
+                mapping.to_json(image),
+            ),
+        )
+        if payload.group_id is not None:
+            self._bump_image_group_count(payload.group_id, 1)
+        return image
+
+    def _bump_image_group_count(self, group_id: str, delta: int) -> None:
+        row = self._fetchone(
+            "SELECT doc FROM image_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            return
+        group = mapping.image_group_from_dict(self._doc(row))
+        group.image_count += delta
+        self._write(
+            "UPDATE image_groups SET doc = ? WHERE id = ?",
+            (mapping.to_json(group), group_id),
+        )
 
     # -- 抽帧 ---------------------------------------------------------------
     def list_frame_jobs(self) -> Sequence[FrameJob]:

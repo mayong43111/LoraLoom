@@ -70,6 +70,20 @@ def image_from_dict(d: dict[str, Any]) -> models.Image:
         frame_target_timestamp=d.get("frame_target_timestamp"),
         frame_actual_timestamp=d.get("frame_actual_timestamp"),
         thumbnail_hint=d.get("thumbnail_hint", ""),
+        title=d.get("title", ""),
+        group_id=d.get("group_id"),
+        tags=list(d.get("tags", [])),
+        created_at=_dt(d.get("created_at")),
+    )
+
+
+def image_group_from_dict(d: dict[str, Any]) -> models.ImageGroup:
+    return models.ImageGroup(
+        id=d["id"],
+        name=d["name"],
+        description=d.get("description", ""),
+        image_count=d.get("image_count", 0),
+        created_at=_dt(d.get("created_at")),
     )
 
 

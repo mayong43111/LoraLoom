@@ -10,7 +10,9 @@ import type {
   DownloadTask,
   EnumMetadata,
   FrameJob,
+  ImageCreatePayload,
   ImageFilterParams,
+  ImageGroup,
   ImageModel,
   ImportBatch,
   PersonCluster,
@@ -72,6 +74,17 @@ export const api = {
       `/images${buildQuery(filter as Record<string, string | undefined>)}`,
     ),
   getImage: (imageId: string) => request<ImageModel>(`/images/${imageId}`),
+  listImageGroups: () => request<ImageGroup[]>("/image-groups"),
+  createImageGroup: (payload: { name: string; description?: string }) =>
+    request<ImageGroup>("/image-groups", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  createImage: (payload: ImageCreatePayload) =>
+    request<ImageModel>("/images", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   listFrameJobs: () => request<FrameJob[]>("/frame-jobs"),
   listVideoGroups: () => request<VideoGroup[]>("/video-groups"),
   createVideoGroup: (payload: { name: string; description?: string }) =>

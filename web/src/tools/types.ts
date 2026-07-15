@@ -7,7 +7,7 @@
  * `registerTool` 注册）。
  */
 import type { ReactNode } from "react";
-import type { Video } from "@/api/types";
+import type { ImageModel, Video } from "@/api/types";
 
 /** 工具适用范围。决定工具会出现在哪些资源的「工具集合」入口中。 */
 export type ToolScope = "video" | "image" | "global";
@@ -18,7 +18,9 @@ export type ToolScope = "video" | "image" | "global";
  */
 export interface ToolContext {
   /** 当前可作用的视频列表（scope 含 "video" 时提供）。 */
-  videos: Video[];
+  videos?: Video[];
+  /** 当前可作用的图片列表（scope 含 "image" 时提供）。 */
+  images?: ImageModel[];
   /** 工具执行产生数据变更后调用，请求宿主刷新。 */
   onDone: () => void;
 }

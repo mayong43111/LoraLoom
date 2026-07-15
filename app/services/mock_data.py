@@ -31,6 +31,7 @@ from app.domain.models import (
     FrameJob,
     FrameResult,
     Image,
+    ImageGroup,
     ImportBatch,
     PersonCluster,
     QualityMetrics,
@@ -73,8 +74,42 @@ def _build_people(rng: random.Random) -> list[PersonCluster]:
     return people
 
 
-def _build_images(rng: random.Random, people: list[PersonCluster]) -> list[Image]:
+def _build_image_groups(rng: random.Random) -> list[ImageGroup]:
+    """构建图片分组（文件夹）。"""
+    specs = [
+        ("img-group-000", "人物正面", "正面训练集候选"),
+        ("img-group-001", "人物侧面", "侧面角度素材"),
+        ("img-group-002", "外景素材", "外景/环境图片"),
+        ("img-group-003", "未分组", "尚未归类的图片"),
+    ]
+    return [
+        ImageGroup(id=gid, name=name, description=desc)
+        for gid, name, desc in specs
+    ]
+
+
+_IMAGE_TAG_POOL = [
+    "正面",
+    "侧面",
+    "背面",
+    "室内",
+    "室外",
+    "高清",
+    "单人",
+    "多人",
+    "特写",
+    "全身",
+]
+
+
+def _build_images(
+    rng: random.Random,
+    people: list[PersonCluster],
+    groups: list[ImageGroup],
+) -> list[Image]:
     orientations = list(Orientation)
+    group_ids = [g.id for g in groups]
+    counts: dict[str, int] = {g.id: 0 for g in groups}
     images: list[Image] = []
     for i in range(120):
         person = rng.choice(people)
@@ -106,6 +141,9 @@ def _build_images(rng: random.Random, people: list[PersonCluster]) -> list[Image
             status = ImageStatus.FACE_PROCESSED
 
         person_count = 1 if person.display_name != "Unknown" else rng.randint(0, 3)
+        group_id = rng.choice(group_ids)
+        counts[group_id] = counts.get(group_id, 0) + 1
+        tags = rng.sample(_IMAGE_TAG_POOL, rng.randint(1, 3))
         images.append(
             Image(
                 id=f"img-{i:04d}",
@@ -144,8 +182,13 @@ def _build_images(rng: random.Random, people: list[PersonCluster]) -> list[Image
                     float(i % 60) + rng.choice([0.0, 0.2, 0.4]) if i % 3 == 0 else None
                 ),
                 thumbnail_hint=f"{i}-{orientation.value}",
+                title=f"img-{i:04d}.jpg",
+                group_id=group_id,
+                tags=tags,
             )
         )
+    for group in groups:
+        group.image_count = counts.get(group.id, 0)
     return images
 
 
@@ -408,7 +451,8 @@ class MockDataset:
     def __init__(self) -> None:
         rng = random.Random(_SEED)
         self.people = _build_people(rng)
-        self.images = _build_images(rng, self.people)
+        self.image_groups = _build_image_groups(rng)
+        self.images = _build_images(rng, self.people, self.image_groups)
         self.import_batches = _build_import_batches(rng)
         self.downloads = _build_downloads(rng)
         self.video_groups = _build_video_groups(rng)
