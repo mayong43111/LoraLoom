@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pyside_probe/
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+*.local
+
+# 工作区数据（后续真实实现产生）
+workspace/
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db
