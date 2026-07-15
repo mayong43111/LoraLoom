@@ -10,6 +10,7 @@
 import { useMemo, useState } from "react";
 import {
   App,
+  Breadcrumb,
   Button,
   Card,
   Col,
@@ -27,6 +28,11 @@ import {
   Tag,
   Upload,
 } from "antd";
+import {
+  FolderOutlined,
+  HomeOutlined,
+  VideoCameraOutlined,
+} from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
@@ -36,7 +42,7 @@ import { useLabels } from "@/api/labels";
 import { AsyncBoundary } from "@/components/AsyncBoundary";
 import { PageHeader } from "@/components/PageHeader";
 import { EnumTag } from "@/components/EnumTag";
-import { VIDEO_SOURCE_COLOR, VIDEO_STATUS_COLOR } from "@/colors";
+import { VIDEO_SOURCE_COLOR } from "@/colors";
 import type { Video, VideoFilterParams, VideoGroup } from "@/api/types";
 import { getTools } from "@/tools";
 import type { ToolDefinition } from "@/tools";
@@ -101,13 +107,6 @@ function VideoDetail({
           enumName="VideoSourceType"
           value={video.source_type}
           colorMap={VIDEO_SOURCE_COLOR}
-        />
-      </Descriptions.Item>
-      <Descriptions.Item label="状态">
-        <EnumTag
-          enumName="VideoStatus"
-          value={video.status}
-          colorMap={VIDEO_STATUS_COLOR}
         />
       </Descriptions.Item>
       <Descriptions.Item label="创建时间">
@@ -379,68 +378,106 @@ function ToolsModal({
   );
 }
 
-// -- 页面主体表格 -----------------------------------------------------------
-function VideoLibraryTable({
+// -- 页面主体：文件夹式浏览（分组=文件夹，未分组视频在根目录） --------------
+const UNGROUPED_NAME = "未分组";
+
+/** 判断视频是否位于根目录（无分组或归属「未分组」）。 */
+function isRootVideo(video: Video, groups: VideoGroup[]): boolean {
+  if (!video.group_id) return true;
+  const g = groups.find((x) => x.id === video.group_id);
+  return !g || g.name === UNGROUPED_NAME;
+}
+
+type ExplorerRow =
+  | { kind: "folder"; key: string; group: VideoGroup; count: number }
+  | { kind: "file"; key: string; video: Video };
+
+function VideoLibraryExplorer({
   videos,
   groups,
+  currentGroupId,
+  onEnterFolder,
   onOpenDetail,
 }: {
   videos: Video[];
   groups: VideoGroup[];
+  currentGroupId: string | null;
+  onEnterFolder: (groupId: string) => void;
   onOpenDetail: (v: Video) => void;
 }) {
-  const groupName = (id: string | null) =>
-    groups.find((g) => g.id === id)?.name ?? "未分组";
+  const rows: ExplorerRow[] = useMemo(() => {
+    if (currentGroupId === null) {
+      const folderRows: ExplorerRow[] = groups
+        .filter((g) => g.name !== UNGROUPED_NAME)
+        .map((g) => ({
+          kind: "folder",
+          key: `folder:${g.id}`,
+          group: g,
+          count: videos.filter((v) => v.group_id === g.id).length,
+        }));
+      const fileRows: ExplorerRow[] = videos
+        .filter((v) => isRootVideo(v, groups))
+        .map((v) => ({ kind: "file", key: v.id, video: v }));
+      return [...folderRows, ...fileRows];
+    }
+    return videos
+      .filter((v) => v.group_id === currentGroupId)
+      .map((v) => ({ kind: "file", key: v.id, video: v }));
+  }, [videos, groups, currentGroupId]);
 
-  const columns: ColumnsType<Video> = [
-    { title: "名称", dataIndex: "title", key: "title", ellipsis: true },
+  const columns: ColumnsType<ExplorerRow> = [
     {
-      title: "分组",
-      key: "group",
-      width: 120,
-      render: (_, row) => groupName(row.group_id),
+      title: "名称",
+      key: "name",
+      ellipsis: true,
+      render: (_, row) =>
+        row.kind === "folder" ? (
+          <Space>
+            <FolderOutlined style={{ color: "#f0b34e" }} />
+            <span style={{ fontWeight: 600 }}>{row.group.name}</span>
+            <span style={{ color: "#8b90a0" }}>{row.count} 项</span>
+          </Space>
+        ) : (
+          <Space>
+            <VideoCameraOutlined style={{ color: "#4c8dff" }} />
+            <span>{row.video.title}</span>
+          </Space>
+        ),
     },
     {
       title: "来源",
-      dataIndex: "source_type",
       key: "source",
       width: 90,
-      render: (v: string) => (
-        <EnumTag
-          enumName="VideoSourceType"
-          value={v}
-          colorMap={VIDEO_SOURCE_COLOR}
-        />
-      ),
-    },
-    {
-      title: "状态",
-      dataIndex: "status",
-      key: "status",
-      width: 100,
-      render: (v: string) => (
-        <EnumTag enumName="VideoStatus" value={v} colorMap={VIDEO_STATUS_COLOR} />
-      ),
+      render: (_, row) =>
+        row.kind === "file" ? (
+          <EnumTag
+            enumName="VideoSourceType"
+            value={row.video.source_type}
+            colorMap={VIDEO_SOURCE_COLOR}
+          />
+        ) : null,
     },
     {
       title: "时长",
-      dataIndex: "duration",
       key: "duration",
       width: 80,
-      render: (v: number) => formatDuration(v),
+      render: (_, row) =>
+        row.kind === "file" ? formatDuration(row.video.duration) : null,
     },
     {
       title: "分辨率",
       key: "resolution",
       width: 110,
-      render: (_, row) => `${row.width}×${row.height}`,
+      render: (_, row) =>
+        row.kind === "file" ? `${row.video.width}×${row.video.height}` : null,
     },
     {
       title: "标签",
-      dataIndex: "tags",
       key: "tags",
-      render: (tags: string[]) =>
-        tags.length ? (
+      render: (_, row) => {
+        if (row.kind !== "file") return null;
+        const tags = row.video.tags;
+        return tags.length ? (
           <Space size={4} wrap>
             {tags.map((t) => (
               <Tag key={t} color="geekblue" style={{ marginInlineEnd: 0 }}>
@@ -450,30 +487,36 @@ function VideoLibraryTable({
           </Space>
         ) : (
           "-"
-        ),
+        );
+      },
     },
     {
       title: "创建时间",
-      dataIndex: "created_at",
       key: "created_at",
       width: 150,
-      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
+      render: (_, row) =>
+        row.kind === "file"
+          ? dayjs(row.video.created_at).format("YYYY-MM-DD HH:mm")
+          : null,
     },
   ];
 
   return (
     <Table
-      rowKey="id"
+      rowKey="key"
       columns={columns}
-      dataSource={videos}
+      dataSource={rows}
       size="middle"
       pagination={{
         pageSize: 8,
         showSizeChanger: false,
-        showTotal: (t) => `共 ${t} 个视频`,
+        showTotal: (t) => `共 ${t} 项`,
       }}
       onRow={(row) => ({
-        onClick: () => onOpenDetail(row),
+        onClick: () =>
+          row.kind === "folder"
+            ? onEnterFolder(row.group.id)
+            : onOpenDetail(row.video),
         style: { cursor: "pointer" },
       })}
     />
@@ -482,6 +525,7 @@ function VideoLibraryTable({
 
 export function VideoLibraryPage() {
   const [filter, setFilter] = useState<VideoFilterParams>({});
+  const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Video | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -492,7 +536,7 @@ export function VideoLibraryPage() {
   const groups = groupsState.data ?? [];
   const videosState = useAsync(
     () => api.listVideos(filter),
-    [filter.group_id, filter.status, filter.source_type, filter.tag, filter.keyword],
+    [filter.source_type, filter.tag, filter.keyword],
   );
   const videos = videosState.data ?? [];
 
@@ -503,6 +547,8 @@ export function VideoLibraryPage() {
     groupsState.refetch();
     videosState.refetch();
   };
+
+  const currentGroup = groups.find((g) => g.id === currentGroupId) ?? null;
 
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
@@ -515,7 +561,7 @@ export function VideoLibraryPage() {
     <>
       <PageHeader
         title="视频库"
-        subtitle="视频资产管理：分组、上传与筛选"
+        subtitle="视频资产管理：分组（文件夹）、上传与筛选"
         extra={
           <Space>
             <Button onClick={() => setGroupModalOpen(true)}>新建分组</Button>
@@ -527,24 +573,23 @@ export function VideoLibraryPage() {
         }
       />
 
+      <Breadcrumb
+        style={{ marginBottom: 12 }}
+        items={[
+          {
+            title: (
+              <a onClick={() => setCurrentGroupId(null)}>
+                <HomeOutlined /> 全部
+              </a>
+            ),
+          },
+          ...(currentGroup
+            ? [{ title: <span>{currentGroup.name}</span> }]
+            : []),
+        ]}
+      />
+
       <Space wrap style={{ marginBottom: 16 }}>
-        <Select
-          allowClear
-          style={{ width: 160 }}
-          placeholder="分组"
-          value={filter.group_id ?? undefined}
-          onChange={(v) => patch({ group_id: v ?? undefined })}
-          options={groups.map((g) => ({
-            value: g.id,
-            label: `${g.name} (${g.video_count})`,
-          }))}
-        />
-        <EnumSelect
-          enumName="VideoStatus"
-          placeholder="状态"
-          value={filter.status}
-          onChange={(v) => patch({ status: v })}
-        />
         <EnumSelect
           enumName="VideoSourceType"
           placeholder="来源"
@@ -570,9 +615,11 @@ export function VideoLibraryPage() {
 
       <AsyncBoundary state={videosState}>
         {(list) => (
-          <VideoLibraryTable
+          <VideoLibraryExplorer
             videos={list}
             groups={groups}
+            currentGroupId={currentGroupId}
+            onEnterFolder={setCurrentGroupId}
             onOpenDetail={setSelected}
           />
         )}
