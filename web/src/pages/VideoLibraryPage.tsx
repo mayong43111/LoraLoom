@@ -11,12 +11,16 @@ import { useMemo, useState } from "react";
 import {
   App,
   Button,
+  Card,
+  Col,
   Descriptions,
   Drawer,
+  Empty,
   Form,
   Input,
   InputNumber,
   Modal,
+  Row,
   Select,
   Space,
   Table,
@@ -34,6 +38,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { EnumTag } from "@/components/EnumTag";
 import { VIDEO_SOURCE_COLOR, VIDEO_STATUS_COLOR } from "@/colors";
 import type { Video, VideoFilterParams, VideoGroup } from "@/api/types";
+import { getTools } from "@/tools";
+import type { ToolDefinition } from "@/tools";
 
 const ANY = "__any__";
 
@@ -307,119 +313,68 @@ function UploadVideoModal({
   );
 }
 
-// -- 工具集合弹窗 -----------------------------------------------------------
+// -- 工具集合弹窗（卡片式，由工具注册中心驱动） --------------------------
 function ToolsModal({
   open,
   onClose,
-  onSelectFrameTool,
+  onSelectTool,
 }: {
   open: boolean;
   onClose: () => void;
-  onSelectFrameTool: () => void;
+  onSelectTool: (tool: ToolDefinition) => void;
 }) {
-  const tools = [
-    {
-      key: "frame",
-      title: "视频抽帧",
-      desc: "按间隔抽帧并做邻近帧择优，产出候选图片",
-      enabled: true,
-      onClick: onSelectFrameTool,
-    },
-  ];
+  const tools = getTools("video");
   return (
     <Modal
       title="工具集合"
       open={open}
       onCancel={onClose}
       footer={null}
+      width={640}
       destroyOnClose
     >
-      <Space direction="vertical" style={{ width: "100%" }} size={12}>
-        {tools.map((t) => (
-          <Button
-            key={t.key}
-            block
-            size="large"
-            disabled={!t.enabled}
-            style={{ height: "auto", padding: 12, textAlign: "left" }}
-            onClick={t.onClick}
-          >
-            <div style={{ fontWeight: 600 }}>{t.title}</div>
-            <div style={{ fontSize: 12, color: "#8b90a0" }}>{t.desc}</div>
-          </Button>
-        ))}
-      </Space>
-    </Modal>
-  );
-}
-
-// -- 抽帧工具弹窗 -----------------------------------------------------------
-function FrameToolModal({
-  open,
-  onClose,
-  videos,
-  onDone,
-}: {
-  open: boolean;
-  onClose: () => void;
-  videos: Video[];
-  onDone: () => void;
-}) {
-  const { message } = App.useApp();
-  const [form] = Form.useForm();
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-
-  const run = async () => {
-    const values = await form.validateFields();
-    setRunning(true);
-    setResult(null);
-    try {
-      const job = await api.extractFrames(values.video_id, values.interval ?? 1.0);
-      const extracted = job.frames.filter(
-        (f) => f.status !== "skipped_no_good_frame",
-      ).length;
-      setResult(`完成：共 ${job.frames.length} 个采样点，产出 ${extracted} 帧`);
-      message.success("抽帧完成");
-      onDone();
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "抽帧失败");
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="视频抽帧工具"
-      open={open}
-      onOk={run}
-      okText="执行抽帧"
-      confirmLoading={running}
-      onCancel={() => {
-        setResult(null);
-        onClose();
-      }}
-      destroyOnClose
-    >
-      <Form form={form} layout="vertical" preserve={false}>
-        <Form.Item
-          name="video_id"
-          label="选择视频"
-          rules={[{ required: true, message: "请选择视频" }]}
-        >
-          <Select
-            showSearch
-            placeholder="选择要抽帧的视频"
-            optionFilterProp="label"
-            options={videos.map((v) => ({ value: v.id, label: v.title }))}
-          />
-        </Form.Item>
-        <Form.Item name="interval" label="抽帧间隔(秒)" initialValue={1.0}>
-          <InputNumber min={0.1} step={0.1} style={{ width: 160 }} />
-        </Form.Item>
-      </Form>
-      {result && <div style={{ color: "#52c41a" }}>{result}</div>}
+      {tools.length === 0 ? (
+        <Empty description="暂无可用工具" />
+      ) : (
+        <Row gutter={[16, 16]}>
+          {tools.map((tool) => {
+            const disabled = tool.enabled === false;
+            return (
+              <Col key={tool.id} xs={24} sm={12}>
+                <Card
+                  hoverable={!disabled}
+                  onClick={() => !disabled && onSelectTool(tool)}
+                  style={{
+                    height: "100%",
+                    opacity: disabled ? 0.5 : 1,
+                    cursor: disabled ? "not-allowed" : "pointer",
+                  }}
+                  styles={{ body: { padding: 16 } }}
+                >
+                  <Space align="start" size={12}>
+                    <span style={{ fontSize: 28, color: "#4c8dff" }}>
+                      {tool.icon}
+                    </span>
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                        {tool.name}
+                        {tool.source === "external" && (
+                          <Tag color="purple" style={{ marginLeft: 8 }}>
+                            扩展
+                          </Tag>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#8b90a0" }}>
+                        {tool.description}
+                      </div>
+                    </div>
+                  </Space>
+                </Card>
+              </Col>
+            );
+          })}
+        </Row>
+      )}
     </Modal>
   );
 }
@@ -531,7 +486,7 @@ export function VideoLibraryPage() {
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
-  const [frameToolOpen, setFrameToolOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
 
   const groupsState = useAsync(() => api.listVideoGroups(), []);
   const groups = groupsState.data ?? [];
@@ -654,17 +609,16 @@ export function VideoLibraryPage() {
       <ToolsModal
         open={toolsModalOpen}
         onClose={() => setToolsModalOpen(false)}
-        onSelectFrameTool={() => {
+        onSelectTool={(tool) => {
           setToolsModalOpen(false);
-          setFrameToolOpen(true);
+          setActiveTool(tool);
         }}
       />
-      <FrameToolModal
-        open={frameToolOpen}
-        onClose={() => setFrameToolOpen(false)}
-        videos={videos}
-        onDone={refreshAll}
-      />
+      {activeTool?.launch({
+        open: true,
+        onClose: () => setActiveTool(null),
+        context: { videos, onDone: refreshAll },
+      })}
     </>
   );
 }
