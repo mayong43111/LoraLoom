@@ -67,7 +67,7 @@ import { api } from "@/api/client";
 import { registerTool, unregisterTool } from "./registry";
 
 /** 宿主 SDK 版本。外部工具可据此做兼容性判断。 */
-export const HOST_API_VERSION = "1.1.0";
+export const HOST_API_VERSION = "1.2.0";
 
 /**
  * 统一工具后端调用接口。插件通过它调用自身 handler.py 暴露的处理逻辑：
@@ -140,6 +140,66 @@ const antd = {
 };
 
 /**
+ * 统一的全屏工具弹框外壳（Tool Modal Shell）。
+ *
+ * 平台层约定：所有工具弹框（`ui: "modal"`）都应套用同一套全屏样式，工具本身
+ * 只负责定义壳内容。样式与「视频抽帧」保持一致：占满视口、顶部对齐、无圆角、
+ * 内容区自适应滚动。工具通过 `toolkit.ToolModalShell` 复用它，避免各自复制
+ * Modal 配置导致风格漂移。
+ *
+ * props：
+ *   - `open` / `onClose`：弹框开合（对接 `ToolLaunchProps`）。
+ *   - `title`：标题栏内容（字符串或 ReactNode）。
+ *   - `extra`：可选，渲染在标题右侧的操作区（如全局按钮）。
+ *   - `children`：壳内容，由各工具自定义。
+ */
+export interface ToolModalShellProps {
+  open: boolean;
+  onClose: () => void;
+  title?: React.ReactNode;
+  extra?: React.ReactNode;
+  children?: React.ReactNode;
+}
+
+function ToolModalShell(props: ToolModalShellProps): React.ReactElement {
+  const header = props.extra
+    ? React.createElement(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            paddingRight: 32,
+          },
+        },
+        React.createElement("span", null, props.title),
+        React.createElement("div", { onClick: (e: React.MouseEvent) => e.stopPropagation() }, props.extra),
+      )
+    : props.title;
+  return React.createElement(
+    Modal,
+    {
+      title: header,
+      open: props.open,
+      onCancel: props.onClose,
+      footer: null,
+      width: "100vw",
+      destroyOnClose: true,
+      maskClosable: false,
+      keyboard: false,
+      style: { top: 0, maxWidth: "100vw", margin: 0, paddingBottom: 0 },
+      styles: {
+        content: { height: "100vh", display: "flex", flexDirection: "column", borderRadius: 0 },
+        body: { flex: 1, overflowY: "auto", overflowX: "hidden", paddingTop: 4 },
+      },
+    },
+    props.children,
+  );
+}
+
+/**
  * 暴露给外部工具的常用图标集合。为控制打包体积仅提供精选图标；
  * 外部工具亦可用 `React.createElement("svg", ...)` 自绘任意图标。
  */
@@ -173,6 +233,8 @@ export interface DatasetToolkitGlobal {
   api: typeof api;
   /** `React.createElement` 快捷方式。 */
   h: typeof React.createElement;
+  /** 统一的全屏工具弹框外壳（工具只需提供壳内容）。 */
+  ToolModalShell: typeof ToolModalShell;
   /** 统一工具后端调用接口。 */
   invokeTool: typeof invokeTool;
   /** 注册工具。 */
@@ -196,6 +258,7 @@ export function installHostSDK(): void {
     icons,
     api,
     h: React.createElement,
+    ToolModalShell,
     invokeTool,
     registerTool,
     unregisterTool,

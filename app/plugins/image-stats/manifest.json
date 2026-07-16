@@ -1,8 +1,0 @@
-{
-  "id": "image.stats",
-  "name": "图片统计",
-  "description": "统计当前图片数量、朝向分布与高频标签",
-  "scopes": ["image"],
-  "ui": "modal",
-  "entry": "index.js"
-}
