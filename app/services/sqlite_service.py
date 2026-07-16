@@ -12,6 +12,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Sequence
+from dataclasses import replace
 from uuid import uuid4
 
 from app.domain.enums import (
@@ -42,6 +43,7 @@ from app.services.api import (
     ImageCreate,
     ImageFilter,
     ServiceError,
+    UNSET,
     VideoCreate,
     VideoFilter,
 )
@@ -223,6 +225,12 @@ class SqliteDatasetService(DatasetService):
         return [mapping.image_group_from_dict(self._doc(r)) for r in rows]
 
     def create_image_group(self, name: str, description: str = "") -> ImageGroup:
+        existing = self._fetchone(
+            "SELECT doc FROM image_groups WHERE name = ? ORDER BY created_at, id",
+            (name,),
+        )
+        if existing is not None:
+            return mapping.image_group_from_dict(self._doc(existing))
         group = ImageGroup(
             id=f"img-group-{uuid4().hex[:12]}",
             name=name,
@@ -239,6 +247,50 @@ class SqliteDatasetService(DatasetService):
             ),
         )
         return group
+
+    def update_image_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ImageGroup:
+        row = self._fetchone(
+            "SELECT doc FROM image_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        group = mapping.image_group_from_dict(self._doc(row))
+        if name is not None:
+            dup = self._fetchone(
+                "SELECT 1 FROM image_groups WHERE name = ? AND id != ?",
+                (name, group_id),
+            )
+            if dup is not None:
+                raise ServiceError(f"分组名称已存在: {name}")
+            group.name = name
+        if description is not None:
+            group.description = description
+        self._write(
+            "UPDATE image_groups SET name = ?, doc = ? WHERE id = ?",
+            (group.name, mapping.to_json(group), group_id),
+        )
+        return group
+
+    def delete_image_group(self, group_id: str) -> None:
+        row = self._fetchone(
+            "SELECT 1 FROM image_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        images = self.list_images(ImageFilter(group_id=group_id))
+        for image in images:
+            image.group_id = None
+            self._write(
+                "UPDATE images SET group_id = NULL, doc = ? WHERE id = ?",
+                (mapping.to_json(image), image.id),
+            )
+        self._write("DELETE FROM image_groups WHERE id = ?", (group_id,))
 
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
         clauses: list[str] = []
@@ -347,6 +399,83 @@ class SqliteDatasetService(DatasetService):
             (mapping.to_json(group), group_id),
         )
 
+    def update_image(
+        self,
+        image_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: object = UNSET,
+    ) -> Image:
+        image = self.get_image(image_id)
+        old_group = image.group_id
+        if title is not None:
+            image.title = title
+        if tags is not None:
+            image.tags = list(tags)
+        new_group = old_group
+        if group_id is not UNSET and group_id != old_group:
+            if group_id is not None:
+                grp = self._fetchone(
+                    "SELECT 1 FROM image_groups WHERE id = ?", (group_id,)
+                )
+                if grp is None:
+                    raise ServiceError(f"分组不存在: {group_id}")
+            image.group_id = group_id  # type: ignore[assignment]
+            new_group = image.group_id
+        self._write(
+            "UPDATE images SET group_id = ?, doc = ? WHERE id = ?",
+            (image.group_id, mapping.to_json(image), image.id),
+        )
+        if new_group != old_group:
+            if old_group is not None:
+                self._bump_image_group_count(old_group, -1)
+            if new_group is not None:
+                self._bump_image_group_count(new_group, 1)
+        return image
+
+    def delete_image(self, image_id: str) -> None:
+        image = self.get_image(image_id)
+        self._write("DELETE FROM images WHERE id = ?", (image_id,))
+        if image.group_id is not None:
+            self._bump_image_group_count(image.group_id, -1)
+
+    def copy_image(self, image_id: str, *, group_id: str | None = None) -> Image:
+        source = self.get_image(image_id)
+        if group_id is not None:
+            grp = self._fetchone(
+                "SELECT 1 FROM image_groups WHERE id = ?", (group_id,)
+            )
+            if grp is None:
+                raise ServiceError(f"分组不存在: {group_id}")
+        clone = replace(
+            source,
+            id=f"img-{uuid4().hex[:12]}",
+            title=f"{source.title} 副本" if source.title else source.title,
+            group_id=group_id,
+            tags=list(source.tags),
+        )
+        self._write(
+            "INSERT INTO images "
+            "(id, orientation, usability, review_status, primary_subject_id, "
+            "quality_score, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                clone.id,
+                clone.orientation.value,
+                clone.usability.value,
+                clone.review_status.value,
+                clone.primary_subject_id,
+                clone.quality_score,
+                clone.group_id,
+                clone.created_at.isoformat(),
+                mapping.to_json(clone),
+            ),
+        )
+        if group_id is not None:
+            self._bump_image_group_count(group_id, 1)
+        return clone
+
     # -- 抽帧 ---------------------------------------------------------------
     def list_frame_jobs(self) -> Sequence[FrameJob]:
         rows = self._fetchall("SELECT doc FROM frame_jobs")
@@ -360,6 +489,12 @@ class SqliteDatasetService(DatasetService):
         return [mapping.video_group_from_dict(self._doc(r)) for r in rows]
 
     def create_video_group(self, name: str, description: str = "") -> VideoGroup:
+        existing = self._fetchone(
+            "SELECT doc FROM video_groups WHERE name = ? ORDER BY created_at, id",
+            (name,),
+        )
+        if existing is not None:
+            return mapping.video_group_from_dict(self._doc(existing))
         group = VideoGroup(
             id=f"group-{uuid4().hex[:12]}",
             name=name,
@@ -376,6 +511,50 @@ class SqliteDatasetService(DatasetService):
             ),
         )
         return group
+
+    def update_video_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> VideoGroup:
+        row = self._fetchone(
+            "SELECT doc FROM video_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        group = mapping.video_group_from_dict(self._doc(row))
+        if name is not None:
+            dup = self._fetchone(
+                "SELECT 1 FROM video_groups WHERE name = ? AND id != ?",
+                (name, group_id),
+            )
+            if dup is not None:
+                raise ServiceError(f"分组名称已存在: {name}")
+            group.name = name
+        if description is not None:
+            group.description = description
+        self._write(
+            "UPDATE video_groups SET name = ?, doc = ? WHERE id = ?",
+            (group.name, mapping.to_json(group), group_id),
+        )
+        return group
+
+    def delete_video_group(self, group_id: str) -> None:
+        row = self._fetchone(
+            "SELECT 1 FROM video_groups WHERE id = ?", (group_id,)
+        )
+        if row is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        videos = self.list_videos(VideoFilter(group_id=group_id))
+        for video in videos:
+            video.group_id = None
+            self._write(
+                "UPDATE videos SET group_id = NULL, doc = ? WHERE id = ?",
+                (mapping.to_json(video), video.id),
+            )
+        self._write("DELETE FROM video_groups WHERE id = ?", (group_id,))
 
     def list_videos(
         self, video_filter: VideoFilter | None = None
@@ -464,6 +643,78 @@ class SqliteDatasetService(DatasetService):
             "UPDATE video_groups SET doc = ? WHERE id = ?",
             (mapping.to_json(group), group_id),
         )
+
+    def update_video(
+        self,
+        video_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: object = UNSET,
+    ) -> Video:
+        video = self.get_video(video_id)
+        old_group = video.group_id
+        if title is not None:
+            video.title = title
+        if tags is not None:
+            video.tags = list(tags)
+        new_group = old_group
+        if group_id is not UNSET and group_id != old_group:
+            if group_id is not None:
+                grp = self._fetchone(
+                    "SELECT 1 FROM video_groups WHERE id = ?", (group_id,)
+                )
+                if grp is None:
+                    raise ServiceError(f"分组不存在: {group_id}")
+            video.group_id = group_id  # type: ignore[assignment]
+            new_group = video.group_id
+        self._write(
+            "UPDATE videos SET group_id = ?, doc = ? WHERE id = ?",
+            (video.group_id, mapping.to_json(video), video.id),
+        )
+        if new_group != old_group:
+            if old_group is not None:
+                self._bump_group_count(old_group, -1)
+            if new_group is not None:
+                self._bump_group_count(new_group, 1)
+        return video
+
+    def delete_video(self, video_id: str) -> None:
+        video = self.get_video(video_id)
+        self._write("DELETE FROM videos WHERE id = ?", (video_id,))
+        if video.group_id is not None:
+            self._bump_group_count(video.group_id, -1)
+
+    def copy_video(self, video_id: str, *, group_id: str | None = None) -> Video:
+        source = self.get_video(video_id)
+        if group_id is not None:
+            grp = self._fetchone(
+                "SELECT 1 FROM video_groups WHERE id = ?", (group_id,)
+            )
+            if grp is None:
+                raise ServiceError(f"分组不存在: {group_id}")
+        clone = replace(
+            source,
+            id=f"video-{uuid4().hex[:12]}",
+            title=f"{source.title} 副本" if source.title else source.title,
+            group_id=group_id,
+            tags=list(source.tags),
+        )
+        self._write(
+            "INSERT INTO videos (id, status, source_type, group_id, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                clone.id,
+                clone.status.value,
+                clone.source_type.value,
+                clone.group_id,
+                clone.created_at.isoformat(),
+                mapping.to_json(clone),
+            ),
+        )
+        if group_id is not None:
+            self._bump_group_count(group_id, 1)
+        return clone
 
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:
         row = self._fetchone(

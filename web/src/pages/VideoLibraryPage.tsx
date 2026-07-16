@@ -1,10 +1,10 @@
 /**
  * 视频库页面。
  *
- * 视频库负责视频资产的管理：分组、手动上传、按属性筛选与查看详情。
- * 页面主体是一张带分页与筛选的表格，点击行查看视频「属性」详情
- * （不含抽帧结果）。抽帧等操作被归入独立的「工具集合」，它们作用于
- * 视频，但不属于视频库本身的能力。
+ * 视频库定位为「资源库」：维护视频的基本信息（名称、所属分组、标签）与
+ * 不可编辑的硬指标（分辨率、帧率、时长、编码、大小）。页面主体是文件夹式
+ * 表格：分组即文件夹，支持上传、筛选，以及对单个视频的编辑基本信息、
+ * 移动分组、复制到分组、删除等操作。抽帧等能力归入独立的「工具集合」。
  */
 
 import { useMemo, useState } from "react";
@@ -14,6 +14,7 @@ import {
   Button,
   Descriptions,
   Drawer,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -25,10 +26,16 @@ import {
   Upload,
 } from "antd";
 import {
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
   FolderOutlined,
   HomeOutlined,
+  MoreOutlined,
+  SwapOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
@@ -44,6 +51,8 @@ import { ToolsModal } from "@/tools";
 import type { ToolDefinition } from "@/tools";
 
 const ANY = "__any__";
+const UNGROUPED_NAME = "未分组";
+const ROOT_VALUE = "__root__";
 
 function formatSize(bytes: number): string {
   if (bytes <= 0) return "-";
@@ -85,7 +94,7 @@ function EnumSelect({
   );
 }
 
-// -- 视频详情（仅属性，不含抽帧） -------------------------------------------
+// -- 视频详情（仅属性；硬指标只读） -----------------------------------------
 function VideoDetail({
   video,
   groupName,
@@ -188,6 +197,72 @@ function CreateGroupModal({
           rules={[{ required: true, message: "请输入分组名称" }]}
         >
           <Input placeholder="如：人物访谈" />
+        </Form.Item>
+        <Form.Item name="description" label="描述">
+          <Input.TextArea rows={2} placeholder="可选" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+// -- 编辑分组弹窗 -----------------------------------------------------------
+function EditGroupModal({
+  group,
+  onClose,
+  onSaved,
+}: {
+  group: VideoGroup | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!group) return;
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      await api.updateVideoGroup(group.id, {
+        name: values.name,
+        description: values.description ?? "",
+      });
+      message.success("分组已更新");
+      onSaved();
+      onClose();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "更新失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="编辑分组"
+      open={group !== null}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        initialValues={{
+          name: group?.name,
+          description: group?.description ?? "",
+        }}
+      >
+        <Form.Item
+          name="name"
+          label="分组名称"
+          rules={[{ required: true, message: "请输入分组名称" }]}
+        >
+          <Input placeholder="分组名称" />
         </Form.Item>
         <Form.Item name="description" label="描述">
           <Input.TextArea rows={2} placeholder="可选" />
@@ -308,8 +383,137 @@ function UploadVideoModal({
   );
 }
 
+// -- 编辑基本信息弹窗（仅名称、标签；分辨率/帧率/时长等硬指标不可编辑） -----
+function EditVideoModal({
+  video,
+  onClose,
+  onSaved,
+}: {
+  video: Video | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!video) return;
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      await api.updateVideo(video.id, {
+        title: values.title,
+        tags: values.tags ?? [],
+      });
+      message.success("已保存");
+      onSaved();
+      onClose();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="编辑基本信息"
+      open={video !== null}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        initialValues={{ title: video?.title, tags: video?.tags ?? [] }}
+      >
+        <Form.Item
+          name="title"
+          label="名称"
+          rules={[{ required: true, message: "请输入视频名称" }]}
+        >
+          <Input placeholder="视频名称" />
+        </Form.Item>
+        <Form.Item name="tags" label="标签">
+          <Select
+            mode="tags"
+            placeholder="输入后回车添加多个标签"
+            tokenSeparators={[","]}
+          />
+        </Form.Item>
+        <Descriptions column={1} size="small">
+          <Descriptions.Item label="分辨率 / 帧率 / 时长（不可编辑）">
+            {video
+              ? `${video.width}×${video.height} · ${video.fps}fps · ${formatDuration(
+                  video.duration,
+                )}`
+              : "-"}
+          </Descriptions.Item>
+        </Descriptions>
+      </Form>
+    </Modal>
+  );
+}
+
+// -- 分组选择弹窗（用于移动 / 复制到） --------------------------------------
+function GroupPickerModal({
+  open,
+  title,
+  okText,
+  groups,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  okText: string;
+  groups: VideoGroup[];
+  onClose: () => void;
+  onConfirm: (groupId: string | null) => Promise<void>;
+}) {
+  const [value, setValue] = useState<string>(ROOT_VALUE);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await onConfirm(value === ROOT_VALUE ? null : value);
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={title}
+      open={open}
+      okText={okText}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Select
+        style={{ width: "100%" }}
+        value={value}
+        onChange={setValue}
+        options={[
+          { value: ROOT_VALUE, label: "根目录（未分组）" },
+          ...groups
+            .filter((g) => g.name !== UNGROUPED_NAME)
+            .map((g) => ({ value: g.id, label: g.name })),
+        ]}
+      />
+    </Modal>
+  );
+}
+
 // -- 页面主体：文件夹式浏览（分组=文件夹，未分组视频在根目录） --------------
-const UNGROUPED_NAME = "未分组";
 
 /** 判断视频是否位于根目录（无分组或归属「未分组」）。 */
 function isRootVideo(video: Video, groups: VideoGroup[]): boolean {
@@ -328,12 +532,24 @@ function VideoLibraryExplorer({
   currentGroupId,
   onEnterFolder,
   onOpenDetail,
+  onEdit,
+  onMove,
+  onCopy,
+  onDelete,
+  onEditGroup,
+  onDeleteGroup,
 }: {
   videos: Video[];
   groups: VideoGroup[];
   currentGroupId: string | null;
   onEnterFolder: (groupId: string) => void;
   onOpenDetail: (v: Video) => void;
+  onEdit: (v: Video) => void;
+  onMove: (v: Video) => void;
+  onCopy: (v: Video) => void;
+  onDelete: (v: Video) => void;
+  onEditGroup: (group: VideoGroup) => void;
+  onDeleteGroup: (group: VideoGroup) => void;
 }) {
   const rows: ExplorerRow[] = useMemo(() => {
     if (currentGroupId === null) {
@@ -354,6 +570,32 @@ function VideoLibraryExplorer({
       .filter((v) => v.group_id === currentGroupId)
       .map((v) => ({ kind: "file", key: v.id, video: v }));
   }, [videos, groups, currentGroupId]);
+
+  const actionItems = (): MenuProps["items"] => [
+    { key: "edit", icon: <EditOutlined />, label: "编辑基本信息" },
+    { key: "move", icon: <SwapOutlined />, label: "移动到分组" },
+    { key: "copy", icon: <CopyOutlined />, label: "复制到分组" },
+    { type: "divider" },
+    { key: "delete", icon: <DeleteOutlined />, label: "删除", danger: true },
+  ];
+
+  const onActionClick = (video: Video, key: string) => {
+    if (key === "edit") onEdit(video);
+    else if (key === "move") onMove(video);
+    else if (key === "copy") onCopy(video);
+    else if (key === "delete") onDelete(video);
+  };
+
+  const folderActionItems = (): MenuProps["items"] => [
+    { key: "edit", icon: <EditOutlined />, label: "编辑分组" },
+    { type: "divider" },
+    { key: "delete", icon: <DeleteOutlined />, label: "删除分组", danger: true },
+  ];
+
+  const onFolderActionClick = (group: VideoGroup, key: string) => {
+    if (key === "edit") onEditGroup(group);
+    else if (key === "delete") onDeleteGroup(group);
+  };
 
   const columns: ColumnsType<ExplorerRow> = [
     {
@@ -429,6 +671,38 @@ function VideoLibraryExplorer({
           ? dayjs(row.video.created_at).format("YYYY-MM-DD HH:mm")
           : null,
     },
+    {
+      title: "操作",
+      key: "actions",
+      width: 60,
+      align: "center",
+      render: (_, row) =>
+        row.kind === "file" ? (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: actionItems(),
+                onClick: ({ key }) => onActionClick(row.video, key),
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} />
+            </Dropdown>
+          </div>
+        ) : (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: folderActionItems(),
+                onClick: ({ key }) => onFolderActionClick(row.group, key),
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} />
+            </Dropdown>
+          </div>
+        ),
+    },
   ];
 
   return (
@@ -454,6 +728,7 @@ function VideoLibraryExplorer({
 }
 
 export function VideoLibraryPage() {
+  const { message, modal } = App.useApp();
   const [filter, setFilter] = useState<VideoFilterParams>({});
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Video | null>(null);
@@ -461,6 +736,10 @@ export function VideoLibraryPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
+  const [editing, setEditing] = useState<Video | null>(null);
+  const [moving, setMoving] = useState<Video | null>(null);
+  const [copying, setCopying] = useState<Video | null>(null);
+  const [editingGroup, setEditingGroup] = useState<VideoGroup | null>(null);
 
   const groupsState = useAsync(() => api.listVideoGroups(), []);
   const groups = groupsState.data ?? [];
@@ -482,16 +761,59 @@ export function VideoLibraryPage() {
 
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const v of videos) v.tags.forEach((t) => set.add(t));
+    for (const v of videos) (v.tags ?? []).forEach((t) => set.add(t));
     if (filter.tag) set.add(filter.tag);
     return Array.from(set).map((t) => ({ value: t, label: t }));
   }, [videos, filter.tag]);
+
+  const confirmDelete = (video: Video) => {
+    modal.confirm({
+      title: "删除视频",
+      content: `确定要删除「${video.title}」吗？此操作不可撤销。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await api.deleteVideo(video.id);
+          message.success("已删除");
+          refreshAll();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+        }
+      },
+    });
+  };
+
+  const confirmDeleteGroup = (group: VideoGroup) => {
+    const count = videos.filter((v) => v.group_id === group.id).length;
+    modal.confirm({
+      title: "删除分组",
+      content:
+        count > 0
+          ? `分组「${group.name}」内有 ${count} 个视频，删除后这些视频将移出分组（回到根目录），分组本身被删除。确定继续吗？`
+          : `确定要删除分组「${group.name}」吗？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await api.deleteVideoGroup(group.id);
+          message.success("分组已删除");
+          if (currentGroupId === group.id) setCurrentGroupId(null);
+          refreshAll();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+        }
+      },
+    });
+  };
 
   return (
     <>
       <PageHeader
         title="视频库"
-        subtitle="视频资产管理：分组（文件夹）、上传与筛选"
+        subtitle="视频资源管理：分组（文件夹）、上传、标签与筛选"
         extra={
           <Space>
             <Button onClick={() => setGroupModalOpen(true)}>新建分组</Button>
@@ -551,6 +873,12 @@ export function VideoLibraryPage() {
             currentGroupId={currentGroupId}
             onEnterFolder={setCurrentGroupId}
             onOpenDetail={setSelected}
+            onEdit={setEditing}
+            onMove={setMoving}
+            onCopy={setCopying}
+            onDelete={confirmDelete}
+            onEditGroup={setEditingGroup}
+            onDeleteGroup={confirmDeleteGroup}
           />
         )}
       </AsyncBoundary>
@@ -577,11 +905,55 @@ export function VideoLibraryPage() {
         onClose={() => setGroupModalOpen(false)}
         onCreated={refreshAll}
       />
+      <EditGroupModal
+        group={editingGroup}
+        onClose={() => setEditingGroup(null)}
+        onSaved={refreshAll}
+      />
       <UploadVideoModal
         open={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
         groups={groups}
         onCreated={refreshAll}
+      />
+      <EditVideoModal
+        video={editing}
+        onClose={() => setEditing(null)}
+        onSaved={refreshAll}
+      />
+      <GroupPickerModal
+        open={moving !== null}
+        title={`移动「${moving?.title ?? ""}」到分组`}
+        okText="移动"
+        groups={groups}
+        onClose={() => setMoving(null)}
+        onConfirm={async (groupId) => {
+          if (!moving) return;
+          try {
+            await api.updateVideo(moving.id, { group_id: groupId });
+            message.success("已移动");
+            refreshAll();
+          } catch (err) {
+            message.error(err instanceof Error ? err.message : "移动失败");
+          }
+        }}
+      />
+      <GroupPickerModal
+        open={copying !== null}
+        title={`复制「${copying?.title ?? ""}」到分组`}
+        okText="复制"
+        groups={groups}
+        onClose={() => setCopying(null)}
+        onConfirm={async (groupId) => {
+          if (!copying) return;
+          try {
+            await api.copyVideo(copying.id, groupId);
+            message.success("已复制");
+            refreshAll();
+          } catch (err) {
+            message.error(err instanceof Error ? err.message : "复制失败");
+          }
+        }}
       />
       <ToolsModal
         open={toolsModalOpen}

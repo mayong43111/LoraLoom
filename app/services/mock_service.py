@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from uuid import uuid4
 
 from app.domain.enums import (
@@ -37,6 +38,7 @@ from app.services.api import (
     ImageCreate,
     ImageFilter,
     ServiceError,
+    UNSET,
     VideoCreate,
     VideoFilter,
 )
@@ -120,6 +122,11 @@ class MockDatasetService(DatasetService):
         return list(self._data.image_groups)
 
     def create_image_group(self, name: str, description: str = "") -> ImageGroup:
+        existing = next(
+            (g for g in self._data.image_groups if g.name == name), None
+        )
+        if existing is not None:
+            return existing
         group = ImageGroup(
             id=f"img-group-{uuid4().hex[:12]}",
             name=name,
@@ -128,6 +135,38 @@ class MockDatasetService(DatasetService):
         self._data.image_groups.append(group)
         self._image_group_index[group.id] = group
         return group
+
+    def update_image_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ImageGroup:
+        group = self._image_group_index.get(group_id)
+        if group is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        if name is not None:
+            if any(
+                g.id != group_id and g.name == name for g in self._data.image_groups
+            ):
+                raise ServiceError(f"分组名称已存在: {name}")
+            group.name = name
+        if description is not None:
+            group.description = description
+        return group
+
+    def delete_image_group(self, group_id: str) -> None:
+        group = self._image_group_index.get(group_id)
+        if group is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        for img in self._data.images:
+            if img.group_id == group_id:
+                img.group_id = None
+        self._data.image_groups = [
+            g for g in self._data.image_groups if g.id != group_id
+        ]
+        del self._image_group_index[group_id]
 
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
         images: Sequence[Image] = sorted(
@@ -212,6 +251,53 @@ class MockDatasetService(DatasetService):
             self._image_group_index[payload.group_id].image_count += 1
         return image
 
+    def update_image(
+        self,
+        image_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: object = UNSET,
+    ) -> Image:
+        image = self.get_image(image_id)
+        if title is not None:
+            image.title = title
+        if tags is not None:
+            image.tags = list(tags)
+        if group_id is not UNSET and group_id != image.group_id:
+            if group_id is not None and group_id not in self._image_group_index:
+                raise ServiceError(f"分组不存在: {group_id}")
+            if image.group_id is not None:
+                self._image_group_index[image.group_id].image_count -= 1
+            image.group_id = group_id  # type: ignore[assignment]
+            if group_id is not None:
+                self._image_group_index[group_id].image_count += 1
+        return image
+
+    def delete_image(self, image_id: str) -> None:
+        image = self.get_image(image_id)
+        self._data.images.remove(image)
+        del self._image_index[image_id]
+        if image.group_id is not None and image.group_id in self._image_group_index:
+            self._image_group_index[image.group_id].image_count -= 1
+
+    def copy_image(self, image_id: str, *, group_id: str | None = None) -> Image:
+        source = self.get_image(image_id)
+        if group_id is not None and group_id not in self._image_group_index:
+            raise ServiceError(f"分组不存在: {group_id}")
+        clone = replace(
+            source,
+            id=f"img-{uuid4().hex[:12]}",
+            title=f"{source.title} 副本" if source.title else source.title,
+            group_id=group_id,
+            tags=list(source.tags),
+        )
+        self._data.images.append(clone)
+        self._image_index[clone.id] = clone
+        if group_id is not None:
+            self._image_group_index[group_id].image_count += 1
+        return clone
+
     # -- 抽帧 ---------------------------------------------------------------
     def list_frame_jobs(self) -> Sequence[FrameJob]:
         return list(self._data.frame_jobs)
@@ -221,6 +307,11 @@ class MockDatasetService(DatasetService):
         return list(self._data.video_groups)
 
     def create_video_group(self, name: str, description: str = "") -> VideoGroup:
+        existing = next(
+            (g for g in self._data.video_groups if g.name == name), None
+        )
+        if existing is not None:
+            return existing
         group = VideoGroup(
             id=f"group-{uuid4().hex[:12]}",
             name=name,
@@ -229,6 +320,38 @@ class MockDatasetService(DatasetService):
         self._data.video_groups.append(group)
         self._group_index[group.id] = group
         return group
+
+    def update_video_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> VideoGroup:
+        group = self._group_index.get(group_id)
+        if group is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        if name is not None:
+            if any(
+                g.id != group_id and g.name == name for g in self._data.video_groups
+            ):
+                raise ServiceError(f"分组名称已存在: {name}")
+            group.name = name
+        if description is not None:
+            group.description = description
+        return group
+
+    def delete_video_group(self, group_id: str) -> None:
+        group = self._group_index.get(group_id)
+        if group is None:
+            raise ServiceError(f"分组不存在: {group_id}")
+        for video in self._data.videos:
+            if video.group_id == group_id:
+                video.group_id = None
+        self._data.video_groups = [
+            g for g in self._data.video_groups if g.id != group_id
+        ]
+        del self._group_index[group_id]
 
     def list_videos(
         self, video_filter: VideoFilter | None = None
@@ -284,6 +407,57 @@ class MockDatasetService(DatasetService):
         if payload.group_id is not None:
             self._group_index[payload.group_id].video_count += 1
         return video
+
+    def update_video(
+        self,
+        video_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: object = UNSET,
+    ) -> Video:
+        video = self.get_video(video_id)
+        if title is not None:
+            video.title = title
+        if tags is not None:
+            video.tags = list(tags)
+        if group_id is not UNSET and group_id != video.group_id:
+            if group_id is not None and group_id not in self._group_index:
+                raise ServiceError(f"分组不存在: {group_id}")
+            if video.group_id is not None and video.group_id in self._group_index:
+                self._group_index[video.group_id].video_count = max(
+                    0, self._group_index[video.group_id].video_count - 1
+                )
+            video.group_id = group_id  # type: ignore[assignment]
+            if group_id is not None:
+                self._group_index[group_id].video_count += 1
+        return video
+
+    def delete_video(self, video_id: str) -> None:
+        video = self.get_video(video_id)
+        self._data.videos.remove(video)
+        del self._video_index[video_id]
+        if video.group_id is not None and video.group_id in self._group_index:
+            self._group_index[video.group_id].video_count = max(
+                0, self._group_index[video.group_id].video_count - 1
+            )
+
+    def copy_video(self, video_id: str, *, group_id: str | None = None) -> Video:
+        source = self.get_video(video_id)
+        if group_id is not None and group_id not in self._group_index:
+            raise ServiceError(f"分组不存在: {group_id}")
+        clone = replace(
+            source,
+            id=f"video-{uuid4().hex[:12]}",
+            title=f"{source.title} 副本" if source.title else source.title,
+            group_id=group_id,
+            tags=list(source.tags),
+        )
+        self._data.videos.append(clone)
+        self._video_index[clone.id] = clone
+        if group_id is not None:
+            self._group_index[group_id].video_count += 1
+        return clone
 
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:
         return self._frame_job_index.get(video_id)

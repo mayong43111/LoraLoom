@@ -14,6 +14,7 @@ import type {
   ImageFilterParams,
   ImageGroup,
   ImageModel,
+  ImageUpdatePayload,
   ImportBatch,
   PersonCluster,
   Selection,
@@ -21,6 +22,7 @@ import type {
   VideoCreatePayload,
   VideoFilterParams,
   VideoGroup,
+  VideoUpdatePayload,
 } from "./types";
 
 const API_BASE = "/api";
@@ -49,6 +51,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       /* 忽略非 JSON 错误体 */
     }
     throw new ApiError(res.status, detail);
+  }
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
   }
   return (await res.json()) as T;
 }
@@ -80,11 +85,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateImageGroup: (
+    groupId: string,
+    payload: { name?: string; description?: string },
+  ) =>
+    request<ImageGroup>(`/image-groups/${groupId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteImageGroup: (groupId: string) =>
+    request<void>(`/image-groups/${groupId}`, { method: "DELETE" }),
   createImage: (payload: ImageCreatePayload) =>
     request<ImageModel>("/images", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateImage: (imageId: string, payload: ImageUpdatePayload) =>
+    request<ImageModel>(`/images/${imageId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  copyImage: (imageId: string, groupId: string | null) =>
+    request<ImageModel>(`/images/${imageId}/copy`, {
+      method: "POST",
+      body: JSON.stringify({ group_id: groupId }),
+    }),
+  deleteImage: (imageId: string) =>
+    request<void>(`/images/${imageId}`, { method: "DELETE" }),
   listFrameJobs: () => request<FrameJob[]>("/frame-jobs"),
   listVideoGroups: () => request<VideoGroup[]>("/video-groups"),
   createVideoGroup: (payload: { name: string; description?: string }) =>
@@ -92,6 +119,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateVideoGroup: (
+    groupId: string,
+    payload: { name?: string; description?: string },
+  ) =>
+    request<VideoGroup>(`/video-groups/${groupId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteVideoGroup: (groupId: string) =>
+    request<void>(`/video-groups/${groupId}`, { method: "DELETE" }),
   listVideos: (filter: VideoFilterParams = {}) =>
     request<Video[]>(
       `/videos${buildQuery(filter as Record<string, string | undefined>)}`,
@@ -102,6 +139,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateVideo: (videoId: string, payload: VideoUpdatePayload) =>
+    request<Video>(`/videos/${videoId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  copyVideo: (videoId: string, groupId: string | null) =>
+    request<Video>(`/videos/${videoId}/copy`, {
+      method: "POST",
+      body: JSON.stringify({ group_id: groupId }),
+    }),
+  deleteVideo: (videoId: string) =>
+    request<void>(`/videos/${videoId}`, { method: "DELETE" }),
   getVideoFrameJob: (videoId: string) =>
     request<FrameJob | null>(`/videos/${videoId}/frame-job`),
   extractFrames: (videoId: string, interval: number) =>

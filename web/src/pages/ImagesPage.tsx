@@ -1,10 +1,13 @@
 /**
  * 图片库页面。
  *
- * 与视频库采用一致的设计：分组（文件夹）、手动上传、按属性筛选与查看
- * 详情。页面主体是一张带分页与筛选的表格，点击行查看图片「属性」详情。
- * 更复杂的操作（如统计、批处理）归入独立的「工具集合」，作用于图片但
- * 不属于图片库本身的能力。
+ * 图片库定位为「资源库」：只维护文件的基本信息（名称、所属分组、标签）
+ * 与不可编辑的硬指标（分辨率）。朝向、角色等语义信息都以标签（Tag）形式
+ * 存在——例如由「角色识别工具」识别后回写标签，而不是独立字段。
+ *
+ * 页面主体是文件夹式表格：分组即文件夹，支持上传、筛选，以及对单张图片的
+ * 编辑基本信息、移动分组、复制到分组、删除等操作。更复杂的批处理归入
+ * 独立的「工具集合」。
  */
 
 import { useMemo, useState } from "react";
@@ -14,6 +17,7 @@ import {
   Button,
   Descriptions,
   Drawer,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -24,66 +28,40 @@ import {
   Tag,
   Upload,
 } from "antd";
-import { FolderOutlined, HomeOutlined, PictureOutlined } from "@ant-design/icons";
+import {
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FolderOutlined,
+  HomeOutlined,
+  MoreOutlined,
+  PictureOutlined,
+  SwapOutlined,
+} from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
 import { api } from "@/api/client";
 import { useAsync } from "@/api/useAsync";
-import { useLabels } from "@/api/labels";
 import { AsyncBoundary } from "@/components/AsyncBoundary";
 import { PageHeader } from "@/components/PageHeader";
-import { EnumTag } from "@/components/EnumTag";
 import { Thumbnail } from "@/components/Thumbnail";
-import { ORIENTATION_COLOR, REVIEW_COLOR, USABILITY_COLOR } from "@/colors";
-import type {
-  ImageFilterParams,
-  ImageGroup,
-  ImageModel,
-  PersonCluster,
-} from "@/api/types";
+import type { ImageFilterParams, ImageGroup, ImageModel } from "@/api/types";
 import { ToolsModal } from "@/tools";
 import type { ToolDefinition } from "@/tools";
 
-const ANY = "__any__";
+const UNGROUPED_NAME = "未分组";
+const ROOT_VALUE = "__root__";
 
-function EnumSelect({
-  enumName,
-  placeholder,
-  value,
-  onChange,
-  width = 140,
-}: {
-  enumName: string;
-  placeholder: string;
-  value: string | undefined;
-  onChange: (v: string | undefined) => void;
-  width?: number;
-}) {
-  const { entries } = useLabels();
-  return (
-    <Select
-      allowClear
-      style={{ width }}
-      placeholder={placeholder}
-      value={value ?? undefined}
-      onChange={(v) => onChange(v === ANY ? undefined : v)}
-      options={entries(enumName).map((e) => ({ value: e.value, label: e.label }))}
-    />
-  );
-}
-
-// -- 图片详情（仅属性） -----------------------------------------------------
+// -- 图片详情（仅属性；硬指标只读） -----------------------------------------
 function ImageDetail({
   image,
   groupName,
-  people,
 }: {
   image: ImageModel;
   groupName: string;
-  people: PersonCluster[];
 }) {
-  const person = people.find((p) => p.id === image.primary_subject_id);
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Thumbnail
@@ -100,35 +78,8 @@ function ImageDetail({
         <Descriptions.Item label="创建时间">
           {dayjs(image.created_at).format("YYYY-MM-DD HH:mm")}
         </Descriptions.Item>
-        <Descriptions.Item label="尺寸">
+        <Descriptions.Item label="分辨率">
           {image.width}×{image.height}
-        </Descriptions.Item>
-        <Descriptions.Item label="质量分">
-          {image.quality_score.toFixed(3)}
-        </Descriptions.Item>
-        <Descriptions.Item label="朝向">
-          <EnumTag
-            enumName="Orientation"
-            value={image.orientation}
-            colorMap={ORIENTATION_COLOR}
-          />
-        </Descriptions.Item>
-        <Descriptions.Item label="可用性">
-          <EnumTag
-            enumName="Usability"
-            value={image.usability}
-            colorMap={USABILITY_COLOR}
-          />
-        </Descriptions.Item>
-        <Descriptions.Item label="复核状态">
-          <EnumTag
-            enumName="ReviewStatus"
-            value={image.review_status}
-            colorMap={REVIEW_COLOR}
-          />
-        </Descriptions.Item>
-        <Descriptions.Item label="主体人物">
-          {person ? person.display_name : "-"}
         </Descriptions.Item>
         <Descriptions.Item label="标签">
           {image.tags.length ? (
@@ -197,6 +148,72 @@ function CreateGroupModal({
           rules={[{ required: true, message: "请输入分组名称" }]}
         >
           <Input placeholder="如：人物正面" />
+        </Form.Item>
+        <Form.Item name="description" label="描述">
+          <Input.TextArea rows={2} placeholder="可选" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+// -- 编辑分组弹窗 -----------------------------------------------------------
+function EditGroupModal({
+  group,
+  onClose,
+  onSaved,
+}: {
+  group: ImageGroup | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!group) return;
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      await api.updateImageGroup(group.id, {
+        name: values.name,
+        description: values.description ?? "",
+      });
+      message.success("分组已更新");
+      onSaved();
+      onClose();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "更新失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="编辑分组"
+      open={group !== null}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        initialValues={{
+          name: group?.name,
+          description: group?.description ?? "",
+        }}
+      >
+        <Form.Item
+          name="name"
+          label="分组名称"
+          rules={[{ required: true, message: "请输入分组名称" }]}
+        >
+          <Input placeholder="分组名称" />
         </Form.Item>
         <Form.Item name="description" label="描述">
           <Input.TextArea rows={2} placeholder="可选" />
@@ -307,8 +324,133 @@ function UploadImageModal({
   );
 }
 
+// -- 编辑基本信息弹窗（仅名称、标签；分辨率等硬指标不可编辑） ---------------
+function EditImageModal({
+  image,
+  onClose,
+  onSaved,
+}: {
+  image: ImageModel | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!image) return;
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      await api.updateImage(image.id, {
+        title: values.title,
+        tags: values.tags ?? [],
+      });
+      message.success("已保存");
+      onSaved();
+      onClose();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="编辑基本信息"
+      open={image !== null}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        initialValues={{ title: image?.title, tags: image?.tags ?? [] }}
+      >
+        <Form.Item
+          name="title"
+          label="名称"
+          rules={[{ required: true, message: "请输入图片名称" }]}
+        >
+          <Input placeholder="图片名称" />
+        </Form.Item>
+        <Form.Item name="tags" label="标签">
+          <Select
+            mode="tags"
+            placeholder="输入后回车添加多个标签"
+            tokenSeparators={[","]}
+          />
+        </Form.Item>
+        <Descriptions column={1} size="small">
+          <Descriptions.Item label="分辨率（不可编辑）">
+            {image ? `${image.width}×${image.height}` : "-"}
+          </Descriptions.Item>
+        </Descriptions>
+      </Form>
+    </Modal>
+  );
+}
+
+// -- 分组选择弹窗（用于移动 / 复制到） --------------------------------------
+function GroupPickerModal({
+  open,
+  title,
+  okText,
+  groups,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  okText: string;
+  groups: ImageGroup[];
+  onClose: () => void;
+  onConfirm: (groupId: string | null) => Promise<void>;
+}) {
+  const [value, setValue] = useState<string>(ROOT_VALUE);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await onConfirm(value === ROOT_VALUE ? null : value);
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={title}
+      open={open}
+      okText={okText}
+      onOk={submit}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+    >
+      <Select
+        style={{ width: "100%" }}
+        value={value}
+        onChange={setValue}
+        options={[
+          { value: ROOT_VALUE, label: "根目录（未分组）" },
+          ...groups
+            .filter((g) => g.name !== UNGROUPED_NAME)
+            .map((g) => ({ value: g.id, label: g.name })),
+        ]}
+      />
+    </Modal>
+  );
+}
+
 // -- 页面主体：文件夹式浏览（分组=文件夹，未分组图片在根目录） --------------
-const UNGROUPED_NAME = "未分组";
 
 /** 判断图片是否位于根目录（无分组或归属「未分组」）。 */
 function isRootImage(image: ImageModel, groups: ImageGroup[]): boolean {
@@ -327,12 +469,24 @@ function ImageLibraryExplorer({
   currentGroupId,
   onEnterFolder,
   onOpenDetail,
+  onEdit,
+  onMove,
+  onCopy,
+  onDelete,
+  onEditGroup,
+  onDeleteGroup,
 }: {
   images: ImageModel[];
   groups: ImageGroup[];
   currentGroupId: string | null;
   onEnterFolder: (groupId: string) => void;
   onOpenDetail: (img: ImageModel) => void;
+  onEdit: (img: ImageModel) => void;
+  onMove: (img: ImageModel) => void;
+  onCopy: (img: ImageModel) => void;
+  onDelete: (img: ImageModel) => void;
+  onEditGroup: (group: ImageGroup) => void;
+  onDeleteGroup: (group: ImageGroup) => void;
 }) {
   const rows: ExplorerRow[] = useMemo(() => {
     if (currentGroupId === null) {
@@ -353,6 +507,32 @@ function ImageLibraryExplorer({
       .filter((v) => v.group_id === currentGroupId)
       .map((v) => ({ kind: "file", key: v.id, image: v }));
   }, [images, groups, currentGroupId]);
+
+  const actionItems = (): MenuProps["items"] => [
+    { key: "edit", icon: <EditOutlined />, label: "编辑基本信息" },
+    { key: "move", icon: <SwapOutlined />, label: "移动到分组" },
+    { key: "copy", icon: <CopyOutlined />, label: "复制到分组" },
+    { type: "divider" },
+    { key: "delete", icon: <DeleteOutlined />, label: "删除", danger: true },
+  ];
+
+  const folderActionItems = (): MenuProps["items"] => [
+    { key: "edit", icon: <EditOutlined />, label: "编辑分组" },
+    { type: "divider" },
+    { key: "delete", icon: <DeleteOutlined />, label: "删除分组", danger: true },
+  ];
+
+  const onActionClick = (img: ImageModel, key: string) => {
+    if (key === "edit") onEdit(img);
+    else if (key === "move") onMove(img);
+    else if (key === "copy") onCopy(img);
+    else if (key === "delete") onDelete(img);
+  };
+
+  const onFolderActionClick = (group: ImageGroup, key: string) => {
+    if (key === "edit") onEditGroup(group);
+    else if (key === "delete") onDeleteGroup(group);
+  };
 
   const columns: ColumnsType<ExplorerRow> = [
     {
@@ -377,33 +557,7 @@ function ImageLibraryExplorer({
         ),
     },
     {
-      title: "朝向",
-      key: "orientation",
-      width: 90,
-      render: (_, row) =>
-        row.kind === "file" ? (
-          <EnumTag
-            enumName="Orientation"
-            value={row.image.orientation}
-            colorMap={ORIENTATION_COLOR}
-          />
-        ) : null,
-    },
-    {
-      title: "可用性",
-      key: "usability",
-      width: 100,
-      render: (_, row) =>
-        row.kind === "file" ? (
-          <EnumTag
-            enumName="Usability"
-            value={row.image.usability}
-            colorMap={USABILITY_COLOR}
-          />
-        ) : null,
-    },
-    {
-      title: "尺寸",
+      title: "分辨率",
       key: "resolution",
       width: 110,
       render: (_, row) =>
@@ -437,6 +591,38 @@ function ImageLibraryExplorer({
           ? dayjs(row.image.created_at).format("YYYY-MM-DD HH:mm")
           : null,
     },
+    {
+      title: "操作",
+      key: "actions",
+      width: 60,
+      align: "center",
+      render: (_, row) =>
+        row.kind === "file" ? (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: actionItems(),
+                onClick: ({ key }) => onActionClick(row.image, key),
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} />
+            </Dropdown>
+          </div>
+        ) : (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: folderActionItems(),
+                onClick: ({ key }) => onFolderActionClick(row.group, key),
+              }}
+            >
+              <Button type="text" icon={<MoreOutlined />} />
+            </Dropdown>
+          </div>
+        ),
+    },
   ];
 
   return (
@@ -462,6 +648,7 @@ function ImageLibraryExplorer({
 }
 
 export function ImagesPage() {
+  const { message, modal } = App.useApp();
   const [filter, setFilter] = useState<ImageFilterParams>({});
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
   const [selected, setSelected] = useState<ImageModel | null>(null);
@@ -469,16 +656,18 @@ export function ImagesPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
+  const [editing, setEditing] = useState<ImageModel | null>(null);
+  const [moving, setMoving] = useState<ImageModel | null>(null);
+  const [copying, setCopying] = useState<ImageModel | null>(null);
+  const [editingGroup, setEditingGroup] = useState<ImageGroup | null>(null);
 
   const groupsState = useAsync(() => api.listImageGroups(), []);
   const groups = groupsState.data ?? [];
   const imagesState = useAsync(
     () => api.listImages(filter),
-    [filter.orientation, filter.usability, filter.tag, filter.keyword],
+    [filter.tag, filter.keyword],
   );
   const images = imagesState.data ?? [];
-  const peopleState = useAsync(() => api.listPeople(), []);
-  const people = peopleState.data ?? [];
 
   const patch = (part: Partial<ImageFilterParams>) =>
     setFilter((prev) => ({ ...prev, ...part }));
@@ -497,11 +686,54 @@ export function ImagesPage() {
     return Array.from(set).map((t) => ({ value: t, label: t }));
   }, [images, filter.tag]);
 
+  const confirmDelete = (img: ImageModel) => {
+    modal.confirm({
+      title: "删除图片",
+      content: `确定要删除「${img.title || img.id}」吗？此操作不可撤销。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await api.deleteImage(img.id);
+          message.success("已删除");
+          refreshAll();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+        }
+      },
+    });
+  };
+
+  const confirmDeleteGroup = (group: ImageGroup) => {
+    const count = images.filter((v) => v.group_id === group.id).length;
+    modal.confirm({
+      title: "删除分组",
+      content:
+        count > 0
+          ? `分组「${group.name}」内有 ${count} 张图片，删除后这些图片将移出分组（回到根目录），分组本身被删除。确定继续吗？`
+          : `确定要删除分组「${group.name}」吗？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await api.deleteImageGroup(group.id);
+          message.success("分组已删除");
+          if (currentGroupId === group.id) setCurrentGroupId(null);
+          refreshAll();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+        }
+      },
+    });
+  };
+
   return (
     <>
       <PageHeader
         title="图片库"
-        subtitle="图片资产管理：分组（文件夹）、上传与筛选"
+        subtitle="图片资源管理：分组（文件夹）、上传、标签与筛选"
         extra={
           <Space>
             <Button icon={<PictureOutlined />} onClick={() => setGroupModalOpen(true)}>
@@ -532,23 +764,9 @@ export function ImagesPage() {
       />
 
       <Space wrap style={{ marginBottom: 16 }}>
-        <EnumSelect
-          enumName="Orientation"
-          placeholder="朝向"
-          value={filter.orientation}
-          onChange={(v) => patch({ orientation: v })}
-          width={110}
-        />
-        <EnumSelect
-          enumName="Usability"
-          placeholder="可用性"
-          value={filter.usability}
-          onChange={(v) => patch({ usability: v })}
-          width={120}
-        />
         <Select
           allowClear
-          style={{ width: 140 }}
+          style={{ width: 160 }}
           placeholder="标签"
           value={filter.tag ?? undefined}
           onChange={(v) => patch({ tag: v ?? undefined })}
@@ -570,6 +788,12 @@ export function ImagesPage() {
             currentGroupId={currentGroupId}
             onEnterFolder={setCurrentGroupId}
             onOpenDetail={setSelected}
+            onEdit={setEditing}
+            onMove={setMoving}
+            onCopy={setCopying}
+            onDelete={confirmDelete}
+            onEditGroup={setEditingGroup}
+            onDeleteGroup={confirmDeleteGroup}
           />
         )}
       </AsyncBoundary>
@@ -586,7 +810,6 @@ export function ImagesPage() {
         {selected && (
           <ImageDetail
             image={selected}
-            people={people}
             groupName={
               groups.find((g) => g.id === selected.group_id)?.name ?? "未分组"
             }
@@ -599,11 +822,55 @@ export function ImagesPage() {
         onClose={() => setGroupModalOpen(false)}
         onCreated={refreshAll}
       />
+      <EditGroupModal
+        group={editingGroup}
+        onClose={() => setEditingGroup(null)}
+        onSaved={refreshAll}
+      />
       <UploadImageModal
         open={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
         groups={groups}
         onCreated={refreshAll}
+      />
+      <EditImageModal
+        image={editing}
+        onClose={() => setEditing(null)}
+        onSaved={refreshAll}
+      />
+      <GroupPickerModal
+        open={moving !== null}
+        title={`移动「${moving?.title || moving?.id || ""}」到分组`}
+        okText="移动"
+        groups={groups}
+        onClose={() => setMoving(null)}
+        onConfirm={async (groupId) => {
+          if (!moving) return;
+          try {
+            await api.updateImage(moving.id, { group_id: groupId });
+            message.success("已移动");
+            refreshAll();
+          } catch (err) {
+            message.error(err instanceof Error ? err.message : "移动失败");
+          }
+        }}
+      />
+      <GroupPickerModal
+        open={copying !== null}
+        title={`复制「${copying?.title || copying?.id || ""}」到分组`}
+        okText="复制"
+        groups={groups}
+        onClose={() => setCopying(null)}
+        onConfirm={async (groupId) => {
+          if (!copying) return;
+          try {
+            await api.copyImage(copying.id, groupId);
+            message.success("已复制");
+            refreshAll();
+          } catch (err) {
+            message.error(err instanceof Error ? err.message : "复制失败");
+          }
+        }}
       />
       <ToolsModal
         open={toolsModalOpen}

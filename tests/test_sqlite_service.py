@@ -158,3 +158,131 @@ def test_create_image_group_and_image_persist() -> None:
     assert stored.title == "手动上传.jpg"
     assert any(g.id == group.id for g in reopened.list_image_groups())
 
+
+def test_update_image_edits_info_and_moves_group() -> None:
+    service, path = _service()
+    src = service.create_image_group("A", "")
+    dst = service.create_image_group("B", "")
+    image = service.create_image(ImageCreate(title="a.jpg", group_id=src.id))
+
+    service.update_image(
+        image.id, title="renamed.jpg", tags=["高清"], group_id=dst.id
+    )
+    reopened = SqliteDatasetService(path)
+    stored = reopened.get_image(image.id)
+    assert stored.title == "renamed.jpg"
+    assert stored.tags == ["高清"]
+    assert stored.group_id == dst.id
+    counts = {g.id: g.image_count for g in reopened.list_image_groups()}
+    assert counts[src.id] == 0
+    assert counts[dst.id] == 1
+
+
+def test_copy_and_delete_image_maintain_counts() -> None:
+    service, path = _service()
+    group = service.create_image_group("组", "")
+    image = service.create_image(
+        ImageCreate(title="a.jpg", group_id=group.id, tags=["单人"])
+    )
+    assert service.list_image_groups()[-1].image_count == 1
+
+    clone = service.copy_image(image.id, group_id=group.id)
+    assert clone.id != image.id
+    assert clone.tags == ["单人"]
+    reopened = SqliteDatasetService(path)
+    counts = {g.id: g.image_count for g in reopened.list_image_groups()}
+    assert counts[group.id] == 2
+
+    reopened.delete_image(image.id)
+    again = SqliteDatasetService(path)
+    ids = {i.id for i in again.list_images()}
+    assert image.id not in ids
+    assert clone.id in ids
+    assert {g.id: g.image_count for g in again.list_image_groups()}[group.id] == 1
+
+
+def test_update_copy_delete_video_maintain_counts() -> None:
+    service, path = _service()
+    src = service.create_video_group("A", "")
+    dst = service.create_video_group("B", "")
+    video = service.create_video(
+        VideoCreate(title="a.mp4", group_id=src.id, width=1920, height=1080)
+    )
+
+    service.update_video(video.id, title="b.mp4", tags=["室内"], group_id=dst.id)
+    moved = SqliteDatasetService(path).get_video(video.id)
+    assert moved.title == "b.mp4"
+    assert moved.tags == ["室内"]
+    assert moved.group_id == dst.id
+
+    clone = service.copy_video(video.id, group_id=dst.id)
+    assert clone.id != video.id
+    counts = {g.id: g.video_count for g in SqliteDatasetService(path).list_video_groups()}
+    assert counts[src.id] == 0
+    assert counts[dst.id] == 2
+
+    service.delete_video(video.id)
+    again = SqliteDatasetService(path)
+    ids = {v.id for v in again.list_videos()}
+    assert video.id not in ids
+    assert clone.id in ids
+    assert {g.id: g.video_count for g in again.list_video_groups()}[dst.id] == 1
+
+
+def test_create_group_is_idempotent_by_name() -> None:
+    service, _ = _service()
+    a = service.create_video_group("哆酱", "")
+    b = service.create_video_group("哆酱", "")
+    assert a.id == b.id
+    names = [g.name for g in service.list_video_groups()]
+    assert names.count("哆酱") == 1
+
+    ia = service.create_image_group("同名", "")
+    ib = service.create_image_group("同名", "")
+    assert ia.id == ib.id
+
+
+def test_update_group_renames_and_rejects_duplicate() -> None:
+    service, path = _service()
+    a = service.create_video_group("A", "")
+    service.create_video_group("B", "")
+
+    service.update_video_group(a.id, name="A2", description="desc")
+    reopened = SqliteDatasetService(path)
+    stored = next(g for g in reopened.list_video_groups() if g.id == a.id)
+    assert stored.name == "A2"
+    assert stored.description == "desc"
+
+    try:
+        service.update_video_group(a.id, name="B")
+    except Exception as exc:  # noqa: BLE001 - 验证抛出 ServiceError
+        assert "已存在" in str(exc)
+    else:
+        raise AssertionError("重名应当报错")
+
+
+def test_delete_group_moves_members_to_root() -> None:
+    service, path = _service()
+    grp = service.create_video_group("组", "")
+    video = service.create_video(
+        VideoCreate(title="a.mp4", group_id=grp.id, width=1920, height=1080)
+    )
+
+    service.delete_video_group(grp.id)
+    again = SqliteDatasetService(path)
+    assert all(g.id != grp.id for g in again.list_video_groups())
+    assert again.get_video(video.id).group_id is None
+
+
+def test_delete_image_group_moves_members_to_root() -> None:
+    service, path = _service()
+    grp = service.create_image_group("组", "")
+    image = service.create_image(ImageCreate(title="a.jpg", group_id=grp.id))
+
+    service.delete_image_group(grp.id)
+    again = SqliteDatasetService(path)
+    assert all(g.id != grp.id for g in again.list_image_groups())
+    assert again.get_image(image.id).group_id is None
+
+
+

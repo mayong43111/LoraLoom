@@ -9,6 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.domain.enums import Orientation, ReviewStatus, Usability
 from app.domain.models import (
@@ -27,6 +28,19 @@ from app.domain.models import (
 
 class ServiceError(Exception):
     """服务层统一异常类型。"""
+
+
+class _Unset:
+    """哨兵类型：区分「未提供该字段」与「显式设为 None」。"""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - 仅用于调试展示
+        return "UNSET"
+
+
+# 用于 update_* 方法：group_id=UNSET 表示不改动分组；group_id=None 表示移出分组。
+UNSET: Any = _Unset()
 
 
 @dataclass(slots=True)
@@ -114,7 +128,24 @@ class DatasetService(ABC):
 
     @abstractmethod
     def create_image_group(self, name: str, description: str = "") -> ImageGroup:
-        """新建图片分组，返回创建后的分组。"""
+        """新建图片分组，返回创建后的分组。
+
+        同名分组已存在时不重复创建，直接返回已有分组（保证只保留一个）。
+        """
+
+    @abstractmethod
+    def update_image_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ImageGroup:
+        """编辑图片分组名称/描述；``None`` 表示该字段不改动。"""
+
+    @abstractmethod
+    def delete_image_group(self, group_id: str) -> None:
+        """删除图片分组，其中的图片会被移出分组（回到根目录）。"""
 
     @abstractmethod
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
@@ -128,6 +159,30 @@ class DatasetService(ABC):
     def create_image(self, payload: "ImageCreate") -> Image:
         """手动登记/上传一张本地图片，返回创建后的图片。"""
 
+    @abstractmethod
+    def update_image(
+        self,
+        image_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: Any = UNSET,
+    ) -> Image:
+        """编辑图片基本信息或移动分组。
+
+        ``title``/``tags`` 为 ``None`` 表示不改动；``group_id`` 为 ``UNSET``
+        表示保持分组不变，为 ``None`` 表示移出分组（回到根目录）。
+        分辨率等硬指标不可编辑。
+        """
+
+    @abstractmethod
+    def delete_image(self, image_id: str) -> None:
+        """从图片库删除一张图片。"""
+
+    @abstractmethod
+    def copy_image(self, image_id: str, *, group_id: str | None = None) -> Image:
+        """复制一张图片到指定分组（``group_id=None`` 表示复制到根目录）。"""
+
     # -- 抽帧 ---------------------------------------------------------------
     @abstractmethod
     def list_frame_jobs(self) -> Sequence[FrameJob]:
@@ -140,7 +195,24 @@ class DatasetService(ABC):
 
     @abstractmethod
     def create_video_group(self, name: str, description: str = "") -> VideoGroup:
-        """新建视频分组，返回创建后的分组。"""
+        """新建视频分组，返回创建后的分组。
+
+        同名分组已存在时不重复创建，直接返回已有分组（保证只保留一个）。
+        """
+
+    @abstractmethod
+    def update_video_group(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> VideoGroup:
+        """编辑视频分组名称/描述；``None`` 表示该字段不改动。"""
+
+    @abstractmethod
+    def delete_video_group(self, group_id: str) -> None:
+        """删除视频分组，其中的视频会被移出分组（回到根目录）。"""
 
     @abstractmethod
     def list_videos(
@@ -155,6 +227,30 @@ class DatasetService(ABC):
     @abstractmethod
     def create_video(self, payload: "VideoCreate") -> Video:
         """手动登记/上传一个本地视频，返回创建后的视频。"""
+
+    @abstractmethod
+    def update_video(
+        self,
+        video_id: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        group_id: Any = UNSET,
+    ) -> Video:
+        """编辑视频基本信息或移动分组。
+
+        ``title``/``tags`` 为 ``None`` 表示不改动；``group_id`` 为 ``UNSET``
+        表示保持分组不变，为 ``None`` 表示移出分组。分辨率、帧率、时长等硬
+        指标不可编辑。
+        """
+
+    @abstractmethod
+    def delete_video(self, video_id: str) -> None:
+        """从视频库删除一个视频。"""
+
+    @abstractmethod
+    def copy_video(self, video_id: str, *, group_id: str | None = None) -> Video:
+        """复制一个视频到指定分组（``group_id=None`` 表示复制到根目录）。"""
 
     @abstractmethod
     def get_video_frame_job(self, video_id: str) -> FrameJob | None:

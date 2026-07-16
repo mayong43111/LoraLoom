@@ -166,6 +166,13 @@ export interface VideoCreatePayload {
   path?: string;
 }
 
+/** 编辑视频基本信息 / 移动分组的输入。硬指标（分辨率、帧率、时长）不可编辑。 */
+export interface VideoUpdatePayload {
+  title?: string;
+  tags?: string[];
+  group_id?: string | null;
+}
+
 export interface SelectionRule {
   subject_type: string;
   subject_id: string;
@@ -225,6 +232,13 @@ export interface ImageCreatePayload {
   width?: number;
   height?: number;
   path?: string;
+}
+
+/** 编辑图片基本信息 / 移动分组的输入。硬指标（分辨率）不可编辑。 */
+export interface ImageUpdatePayload {
+  title?: string;
+  tags?: string[];
+  group_id?: string | null;
 }
 
 /** 单个枚举成员的元信息。 */

@@ -43,8 +43,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        "http://localhost:7778",
+        "http://127.0.0.1:7778",
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -109,6 +109,37 @@ def create_image_group(
     return to_jsonable(group)
 
 
+@app.patch("/api/image-groups/{group_id}")
+def update_image_group(
+    group_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="分组名称不能为空")
+        kwargs["name"] = name
+    if "description" in payload:
+        kwargs["description"] = payload.get("description") or ""
+    try:
+        return to_jsonable(service.update_image_group(group_id, **kwargs))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/image-groups/{group_id}")
+def delete_image_group(
+    group_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        service.delete_image_group(group_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": group_id}
+
+
 @app.get("/api/images")
 def list_images(
     service: DatasetService = Depends(get_service),
@@ -165,6 +196,53 @@ def get_image(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.patch("/api/images/{image_id}")
+def update_image(
+    image_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "title" in payload:
+        title = (payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="图片名称不能为空")
+        kwargs["title"] = title
+    if "tags" in payload:
+        kwargs["tags"] = list(payload.get("tags") or [])
+    if "group_id" in payload:
+        kwargs["group_id"] = payload.get("group_id") or None
+    try:
+        return to_jsonable(service.update_image(image_id, **kwargs))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/images/{image_id}/copy", status_code=201)
+def copy_image(
+    image_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        return to_jsonable(
+            service.copy_image(image_id, group_id=payload.get("group_id") or None)
+        )
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/images/{image_id}")
+def delete_image(
+    image_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        service.delete_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": image_id}
+
+
 # -- 抽帧 -------------------------------------------------------------------
 @app.get("/api/frame-jobs")
 def list_frame_jobs(service: DatasetService = Depends(get_service)) -> Any:
@@ -186,6 +264,37 @@ def create_video_group(
         raise HTTPException(status_code=400, detail="分组名称不能为空")
     group = service.create_video_group(name, payload.get("description", ""))
     return to_jsonable(group)
+
+
+@app.patch("/api/video-groups/{group_id}")
+def update_video_group(
+    group_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="分组名称不能为空")
+        kwargs["name"] = name
+    if "description" in payload:
+        kwargs["description"] = payload.get("description") or ""
+    try:
+        return to_jsonable(service.update_video_group(group_id, **kwargs))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/video-groups/{group_id}")
+def delete_video_group(
+    group_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        service.delete_video_group(group_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": group_id}
 
 
 @app.get("/api/videos")
@@ -239,6 +348,53 @@ def get_video(
         return to_jsonable(service.get_video(video_id))
     except ServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/api/videos/{video_id}")
+def update_video(
+    video_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "title" in payload:
+        title = (payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="视频名称不能为空")
+        kwargs["title"] = title
+    if "tags" in payload:
+        kwargs["tags"] = list(payload.get("tags") or [])
+    if "group_id" in payload:
+        kwargs["group_id"] = payload.get("group_id") or None
+    try:
+        return to_jsonable(service.update_video(video_id, **kwargs))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/videos/{video_id}/copy", status_code=201)
+def copy_video(
+    video_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        return to_jsonable(
+            service.copy_video(video_id, group_id=payload.get("group_id") or None)
+        )
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/videos/{video_id}")
+def delete_video(
+    video_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        service.delete_video(video_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": video_id}
 
 
 @app.get("/api/videos/{video_id}/frame-job")
