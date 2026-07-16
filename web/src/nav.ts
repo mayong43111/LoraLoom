@@ -15,23 +15,16 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { key: "dashboard", path: "/", title: "概览", subtitle: "数据集整体状态", mvp: true },
-  { key: "import", path: "/import", title: "导入", subtitle: "批次与来源", mvp: true },
   {
     key: "browser",
     path: "/browser",
-    title: "内置浏览器",
+    title: "浏览器",
     subtitle: "网页采集",
     mvp: false,
     phase: "第二阶段",
   },
-  { key: "downloads", path: "/downloads", title: "下载", subtitle: "任务队列", mvp: true },
   { key: "videos", path: "/videos", title: "视频库", subtitle: "视频管理与抽帧", mvp: true },
   { key: "images", path: "/images", title: "图片库", subtitle: "浏览与筛选", mvp: true },
-  { key: "quality", path: "/quality", title: "质量", subtitle: "质检与问题", mvp: true },
-  { key: "people", path: "/people", title: "人物", subtitle: "聚类管理", mvp: true },
-  { key: "review", path: "/review", title: "复核", subtitle: "人工标注", mvp: true },
-  { key: "selection", path: "/selection", title: "组包", subtitle: "配额选片", mvp: true },
-  { key: "export", path: "/export", title: "导出", subtitle: "训练集导出", mvp: true },
+  { key: "export", path: "/export", title: "数据集", subtitle: "训练集导出", mvp: true },
   { key: "settings", path: "/settings", title: "设置", subtitle: "参数配置", mvp: true },
 ] as const;

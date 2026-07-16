@@ -229,13 +229,20 @@ class MockDatasetService(DatasetService):
             and payload.group_id not in self._image_group_index
         ):
             raise ServiceError(f"分组不存在: {payload.group_id}")
+        flags: list[QualityFlag] = []
+        for flag in payload.quality_flags:
+            try:
+                flags.append(QualityFlag(flag))
+            except ValueError:
+                continue
         image = Image(
             id=f"img-{uuid4().hex[:12]}",
             image_path=payload.path or f"workspace/images/{payload.title}",
             sha256=f"{uuid4().int & ((1 << 64) - 1):016x}",
             width=payload.width,
             height=payload.height,
-            quality_score=0.0,
+            quality_score=payload.quality_score,
+            quality_flags=flags,
             orientation=Orientation.UNKNOWN,
             usability=Usability.NEEDS_REVIEW,
             review_status=ReviewStatus.AUTO,
@@ -244,6 +251,8 @@ class MockDatasetService(DatasetService):
             group_id=payload.group_id,
             tags=list(payload.tags),
             thumbnail_hint=payload.title,
+            frame_target_timestamp=payload.frame_target_timestamp,
+            frame_actual_timestamp=payload.frame_actual_timestamp,
         )
         self._data.images.append(image)
         self._image_index[image.id] = image
@@ -257,6 +266,7 @@ class MockDatasetService(DatasetService):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: object = UNSET,
     ) -> Image:
         image = self.get_image(image_id)
@@ -264,6 +274,8 @@ class MockDatasetService(DatasetService):
             image.title = title
         if tags is not None:
             image.tags = list(tags)
+        if caption is not None:
+            image.caption = caption
         if group_id is not UNSET and group_id != image.group_id:
             if group_id is not None and group_id not in self._image_group_index:
                 raise ServiceError(f"分组不存在: {group_id}")
@@ -414,6 +426,7 @@ class MockDatasetService(DatasetService):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: object = UNSET,
     ) -> Video:
         video = self.get_video(video_id)
@@ -421,6 +434,8 @@ class MockDatasetService(DatasetService):
             video.title = title
         if tags is not None:
             video.tags = list(tags)
+        if caption is not None:
+            video.caption = caption
         if group_id is not UNSET and group_id != video.group_id:
             if group_id is not None and group_id not in self._group_index:
                 raise ServiceError(f"分组不存在: {group_id}")

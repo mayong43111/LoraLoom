@@ -101,6 +101,14 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 def is_empty(conn: sqlite3.Connection) -> bool:
-    """判断数据库是否尚未填充（以 images 表为准）。"""
-    row = conn.execute("SELECT COUNT(*) AS n FROM images").fetchone()
-    return int(row["n"]) == 0
+    """判断数据库是否尚未填充。
+
+    只要核心资源表（images / videos / image_groups / video_groups）中任一存在
+    数据，即视为已填充，从而避免在用户清空某张表（例如删除全部图片）后重启时
+    错误地重新播种，导致与既有数据发生主键冲突。
+    """
+    for table in ("images", "videos", "image_groups", "video_groups"):
+        row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+        if int(row["n"]) > 0:
+            return False
+    return True

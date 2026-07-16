@@ -13,15 +13,25 @@
 
 from __future__ import annotations
 
-import json
+import mimetypes
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.deps import get_service
+from app.api.plugins import (
+    PLUGINS_DIR,
+    PluginError,
+    discover_plugins,
+    invoke_plugin,
+)
 from app.api.serialization import enum_metadata, to_jsonable
 from app.domain.enums import Orientation, ReviewStatus, Usability
 from app.services.api import (
@@ -196,6 +206,29 @@ def get_image(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/images/{image_id}/raw")
+def get_image_raw(
+    image_id: str, service: DatasetService = Depends(get_service)
+) -> Response:
+    """返回图片原始字节，供前端 <img> 直接渲染真实图片。"""
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    path = getattr(image, "image_path", "") or ""
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="图片文件不存在")
+    content_type = mimetypes.guess_type(path)[0] or "image/jpeg"
+    with open(path, "rb") as fh:
+        data = fh.read()
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+
 @app.patch("/api/images/{image_id}")
 def update_image(
     image_id: str,
@@ -210,6 +243,8 @@ def update_image(
         kwargs["title"] = title
     if "tags" in payload:
         kwargs["tags"] = list(payload.get("tags") or [])
+    if "caption" in payload:
+        kwargs["caption"] = str(payload.get("caption") or "")
     if "group_id" in payload:
         kwargs["group_id"] = payload.get("group_id") or None
     try:
@@ -364,6 +399,8 @@ def update_video(
         kwargs["title"] = title
     if "tags" in payload:
         kwargs["tags"] = list(payload.get("tags") or [])
+    if "caption" in payload:
+        kwargs["caption"] = str(payload.get("caption") or "")
     if "group_id" in payload:
         kwargs["group_id"] = payload.get("group_id") or None
     try:
@@ -419,47 +456,208 @@ def extract_frames(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-# -- 工具集合（外部动态注入） -----------------------------------------------
-# 参考 ComfyUI 的自定义扩展目录：每个外部工具是 external_tools/ 下的一个子目录，
-# 内含 manifest.json（元信息）与已构建的 JS 模块（默认 index.js）。前端查询
-# /api/tools 拿到清单后，用原生动态 import 加载模块（经 /api/tool-assets 静态
-# 服务），模块通过全局 window.DatasetToolkit 自注册。未来可从远端下载工具包
-# 落盘到该目录，前端「刷新扩展」即可注入，无需重构主程序。
-EXTERNAL_TOOLS_DIR = Path(__file__).resolve().parents[2] / "external_tools"
+# 视频流式播放：支持 HTTP Range，供抽帧工具的原生 <video> 定位/拖动。
+_STREAM_CHUNK = 1024 * 1024  # 1 MiB
 
 
+def _parse_range(header: str, file_size: int) -> tuple[int, int] | None:
+    """解析 ``Range: bytes=start-end``，返回闭区间 ``(start, end)``；非法返回 None。"""
+    if not header or not header.strip().lower().startswith("bytes="):
+        return None
+    spec = header.split("=", 1)[1].split(",", 1)[0].strip()
+    start_s, _, end_s = spec.partition("-")
+    try:
+        if start_s == "":
+            # 后缀形式 bytes=-N：请求最后 N 字节。
+            length = int(end_s)
+            if length <= 0:
+                return None
+            start = max(file_size - length, 0)
+            end = file_size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else file_size - 1
+    except ValueError:
+        return None
+    if start > end or start >= file_size:
+        return None
+    return start, min(end, file_size - 1)
+
+
+@app.get("/api/videos/{video_id}/stream")
+def stream_video(
+    video_id: str,
+    request: Request,
+    service: DatasetService = Depends(get_service),
+) -> Response:
+    try:
+        video = service.get_video(video_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    path = video.path
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="视频文件不存在")
+    file_size = os.path.getsize(path)
+    content_type = mimetypes.guess_type(path)[0] or "video/mp4"
+
+    rng = _parse_range(request.headers.get("range", ""), file_size)
+    if rng is None:
+        # 无 Range：整段返回，但仍声明支持 Range。
+        def _iter_all() -> Any:
+            with open(path, "rb") as fh:
+                while chunk := fh.read(_STREAM_CHUNK):
+                    yield chunk
+
+        return StreamingResponse(
+            _iter_all(),
+            media_type=content_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+            },
+        )
+
+    start, end = rng
+    length = end - start + 1
+
+    def _iter_range() -> Any:
+        remaining = length
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            while remaining > 0:
+                chunk = fh.read(min(_STREAM_CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Content-Length": str(length),
+    }
+    return StreamingResponse(
+        _iter_range(), status_code=206, media_type=content_type, headers=headers
+    )
+
+
+# 视频封面缩略图：首次访问用 ffmpeg 抽一帧生成并缓存，之后直接读缓存文件。
+_VIDEO_THUMB_DIR = Path.cwd() / "workspace" / "video_thumbs"
+
+
+def _resolve_ffmpeg() -> str | None:
+    """解析 ffmpeg 可执行文件：imageio-ffmpeg 自带二进制 → 系统 PATH。"""
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 - 缺失时回退 PATH
+        pass
+    return shutil.which("ffmpeg")
+
+
+def _generate_video_thumb(src: str, dest: Path, t: float, max_w: int = 480) -> bool:
+    """在时间点 ``t`` 抽一帧写入 ``dest``，成功返回 True。"""
+    exe = _resolve_ffmpeg()
+    if not exe:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            exe,
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{max(t, 0.0):.3f}",
+            "-i",
+            src,
+            "-frames:v",
+            "1",
+            "-an",
+            "-vf",
+            f"scale='min({max_w},iw)':-2",
+            "-c:v",
+            "mjpeg",
+            "-q:v",
+            "3",
+            "-y",
+            str(dest),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return proc.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
+
+
+@app.get("/api/videos/{video_id}/thumbnail")
+def get_video_thumbnail(
+    video_id: str, service: DatasetService = Depends(get_service)
+) -> Response:
+    """返回视频封面缩略图；首次生成后缓存，后续直接读取缓存文件。"""
+    try:
+        video = service.get_video(video_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    cache = _VIDEO_THUMB_DIR / f"{video_id}.jpg"
+    if not cache.is_file():
+        path = video.path
+        if not path or not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="视频文件不存在")
+        duration = getattr(video, "duration", 0) or 0
+        # 取靠前的代表帧：约 10% 处，最多 1 秒，避免片头黑场也避免超长等待。
+        timestamp = min(1.0, duration * 0.1) if duration > 0 else 0.0
+        if not _generate_video_thumb(path, cache, timestamp):
+            raise HTTPException(status_code=404, detail="封面生成失败")
+
+    data = cache.read_bytes()
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+# -- 工具集合（插件化动态注入 + 统一后端调用） -----------------------------
+# 参考 ComfyUI 的自定义扩展目录：每个工具是 app/plugins/ 下的一个子目录，
+# 内含 manifest.json（元信息）、前端 index.js（浏览器原生动态 import 自注册）
+# 与可选的 handler.py（后端处理逻辑）。前端查询 /api/tools 拿到清单后动态加载
+# 前端模块；需要后端处理时统一走 POST /api/tools/{id}/invoke，服务器动态导入
+# 对应插件的 handler 并执行。打包好的插件直接丢进 app/plugins/ 即自动注册。
 @app.get("/api/tools")
 def list_external_tools() -> Any:
-    """扫描外部工具目录，返回可加载的工具清单。"""
-    tools: list[dict[str, Any]] = []
-    if not EXTERNAL_TOOLS_DIR.exists():
-        return tools
-    for folder in sorted(EXTERNAL_TOOLS_DIR.iterdir()):
-        manifest = folder / "manifest.json"
-        if not folder.is_dir() or not manifest.exists():
-            continue
-        try:
-            meta = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue  # 跳过损坏的工具包
-        entry = meta.get("entry", "index.js")
-        tools.append(
-            {
-                "id": meta.get("id", folder.name),
-                "name": meta.get("name", folder.name),
-                "description": meta.get("description", ""),
-                "scopes": meta.get("scopes", ["video"]),
-                "entry": f"/api/tool-assets/{folder.name}/{entry}",
-            }
-        )
-    return tools
+    """扫描插件目录，返回可加载的工具清单。"""
+    return discover_plugins()
 
 
-# 静态服务外部工具资源。挂载在 /api 之下以复用前端 Vite 的 /api 代理。
-EXTERNAL_TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+@app.post("/api/tools/{tool_id}/invoke")
+def invoke_tool(
+    tool_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    """统一工具调用接口：分发到插件 handler 的 invoke(action, payload, service)。"""
+    action = payload.get("action", "")
+    body = payload.get("payload", {})
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload 必须是对象")
+    try:
+        result = invoke_plugin(tool_id, action, body, service)
+    except PluginError as exc:
+        # 插件不存在 → 404；其余（执行/加载错误）→ 400。
+        detail = str(exc)
+        status = 404 if detail.startswith("插件不存在") else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
+    return to_jsonable(result)
+
+
+# 静态服务插件前端资源。挂载在 /api 之下以复用前端 Vite 的 /api 代理。
+PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount(
     "/api/tool-assets",
-    StaticFiles(directory=EXTERNAL_TOOLS_DIR),
+    StaticFiles(directory=PLUGINS_DIR),
     name="tool-assets",
 )
 

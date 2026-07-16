@@ -108,6 +108,7 @@ class Image:
     frame_actual_timestamp: float | None = None
     thumbnail_hint: str = ""  # mock 环境下用于生成占位缩略图的种子
     title: str = ""
+    caption: str = ""
     group_id: str | None = None
     tags: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
@@ -265,6 +266,7 @@ class Video:
     extracted_frame_count: int = 0
     source_download_id: str | None = None
     thumbnail_hint: str = ""
+    caption: str = ""
     group_id: str | None = None
     tags: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)

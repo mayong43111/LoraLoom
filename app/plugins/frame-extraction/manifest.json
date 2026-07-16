@@ -1,0 +1,10 @@
+{
+  "id": "video.frame-extraction",
+  "name": "视频抽帧",
+  "description": "选择视频后按间隔抽帧并做邻近帧择优，粗筛复核后入库",
+  "scopes": ["video"],
+  "selection": "single",
+  "ui": "modal",
+  "entry": "index.js",
+  "backend": "handler.py"
+}

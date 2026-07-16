@@ -66,6 +66,7 @@ export interface ImageModel {
   frame_actual_timestamp: number | null;
   thumbnail_hint: string;
   title: string;
+  caption: string;
   group_id: string | null;
   tags: string[];
   created_at: string;
@@ -131,6 +132,7 @@ export interface Video {
   extracted_frame_count: number;
   source_download_id: string | null;
   thumbnail_hint: string;
+  caption: string;
   group_id: string | null;
   tags: string[];
   created_at: string;
@@ -170,6 +172,7 @@ export interface VideoCreatePayload {
 export interface VideoUpdatePayload {
   title?: string;
   tags?: string[];
+  caption?: string;
   group_id?: string | null;
 }
 
@@ -238,6 +241,7 @@ export interface ImageCreatePayload {
 export interface ImageUpdatePayload {
   title?: string;
   tags?: string[];
+  caption?: string;
   group_id?: string | null;
 }
 

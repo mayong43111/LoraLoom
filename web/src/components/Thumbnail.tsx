@@ -1,14 +1,20 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Image } from "antd";
 
 interface ThumbnailProps {
-  /** 用于生成确定性占位色块的种子（mock 环境无真实图片）。 */
+  /** 用于生成确定性占位色块的种子（无真实图片时回退）。 */
   seed: string;
+  /** 图片 ID；提供后优先渲染真实图片 /api/images/{id}/raw，失败回退占位。 */
+  imageId?: string;
+  /** 是否启用点击全屏预览（需配合 imageId）。 */
+  preview?: boolean;
   size?: number;
   ratio?: number;
 }
 
-/** 由种子哈希生成确定性渐变色块，作为图片缩略图占位。 */
-export function Thumbnail({ seed, size = 160, ratio = 1 }: ThumbnailProps) {
+/** 优先渲染真实图片，加载失败时由种子哈希生成确定性渐变色块占位。 */
+export function Thumbnail({ seed, imageId, preview = false, size = 160, ratio = 1 }: ThumbnailProps) {
+  const [failed, setFailed] = useState(false);
   const { from, to, hint } = useMemo(() => {
     let hash = 0;
     for (let i = 0; i < seed.length; i += 1) {
@@ -24,11 +30,47 @@ export function Thumbnail({ seed, size = 160, ratio = 1 }: ThumbnailProps) {
     };
   }, [seed]);
 
+  const width = size;
+  const height = size / ratio;
+  const src = imageId ? `/api/images/${encodeURIComponent(imageId)}/raw` : "";
+
+  if (imageId && !failed && preview) {
+    return (
+      <Image
+        src={src}
+        alt={hint}
+        width={width}
+        height={height}
+        onError={() => setFailed(true)}
+        style={{ borderRadius: 6, objectFit: "cover", background: "#1b1e26" }}
+        preview={{ mask: "预览" }}
+      />
+    );
+  }
+
+  if (imageId && !failed) {
+    return (
+      <img
+        src={src}
+        alt={hint}
+        onError={() => setFailed(true)}
+        style={{
+          width,
+          height,
+          borderRadius: 6,
+          objectFit: "cover",
+          background: "#1b1e26",
+          display: "block",
+        }}
+      />
+    );
+  }
+
   return (
     <div
       style={{
-        width: size,
-        height: size / ratio,
+        width,
+        height,
         borderRadius: 6,
         background: `linear-gradient(135deg, ${from}, ${to})`,
         display: "flex",

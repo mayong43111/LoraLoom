@@ -32,11 +32,15 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   FolderOutlined,
   HomeOutlined,
   MoreOutlined,
   PictureOutlined,
+  ReloadOutlined,
   SwapOutlined,
+  TagsOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -47,9 +51,11 @@ import { useAsync } from "@/api/useAsync";
 import { AsyncBoundary } from "@/components/AsyncBoundary";
 import { PageHeader } from "@/components/PageHeader";
 import { Thumbnail } from "@/components/Thumbnail";
+import { BatchTagModal } from "@/components/BatchTagModal";
 import type { ImageFilterParams, ImageGroup, ImageModel } from "@/api/types";
 import { ToolsModal } from "@/tools";
-import type { ToolDefinition } from "@/tools";
+import type { ToolDefinition, ToolSelection, ToolTarget } from "@/tools";
+import { MediaBrowser } from "@/components/MediaBrowser";
 
 const UNGROUPED_NAME = "未分组";
 const ROOT_VALUE = "__root__";
@@ -66,6 +72,8 @@ function ImageDetail({
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Thumbnail
         seed={image.thumbnail_hint || image.id}
+        imageId={image.id}
+        preview
         size={280}
         ratio={image.width / image.height}
       />
@@ -80,6 +88,9 @@ function ImageDetail({
         </Descriptions.Item>
         <Descriptions.Item label="分辨率">
           {image.width}×{image.height}
+        </Descriptions.Item>
+        <Descriptions.Item label="Caption">
+          {image.caption || "无"}
         </Descriptions.Item>
         <Descriptions.Item label="标签">
           {image.tags.length ? (
@@ -346,6 +357,7 @@ function EditImageModal({
       await api.updateImage(image.id, {
         title: values.title,
         tags: values.tags ?? [],
+        caption: values.caption ?? "",
       });
       message.success("已保存");
       onSaved();
@@ -370,7 +382,11 @@ function EditImageModal({
         form={form}
         layout="vertical"
         preserve={false}
-        initialValues={{ title: image?.title, tags: image?.tags ?? [] }}
+        initialValues={{
+          title: image?.title,
+          tags: image?.tags ?? [],
+          caption: image?.caption ?? "",
+        }}
       >
         <Form.Item
           name="title"
@@ -384,6 +400,13 @@ function EditImageModal({
             mode="tags"
             placeholder="输入后回车添加多个标签"
             tokenSeparators={[","]}
+          />
+        </Form.Item>
+        <Form.Item name="caption" label="Caption（训练文本）">
+          <Input.TextArea
+            rows={4}
+            placeholder="用于训练的图片描述文本"
+            showCount
           />
         </Form.Item>
         <Descriptions column={1} size="small">
@@ -467,26 +490,34 @@ function ImageLibraryExplorer({
   images,
   groups,
   currentGroupId,
+  selectedRowKeys,
+  onSelectionChange,
   onEnterFolder,
   onOpenDetail,
   onEdit,
   onMove,
   onCopy,
   onDelete,
+  onTools,
   onEditGroup,
   onDeleteGroup,
+  onToolsGroup,
 }: {
   images: ImageModel[];
   groups: ImageGroup[];
   currentGroupId: string | null;
+  selectedRowKeys: string[];
+  onSelectionChange: (keys: string[]) => void;
   onEnterFolder: (groupId: string) => void;
   onOpenDetail: (img: ImageModel) => void;
   onEdit: (img: ImageModel) => void;
   onMove: (img: ImageModel) => void;
   onCopy: (img: ImageModel) => void;
   onDelete: (img: ImageModel) => void;
+  onTools: (img: ImageModel) => void;
   onEditGroup: (group: ImageGroup) => void;
   onDeleteGroup: (group: ImageGroup) => void;
+  onToolsGroup: (group: ImageGroup) => void;
 }) {
   const rows: ExplorerRow[] = useMemo(() => {
     if (currentGroupId === null) {
@@ -510,6 +541,7 @@ function ImageLibraryExplorer({
 
   const actionItems = (): MenuProps["items"] => [
     { key: "edit", icon: <EditOutlined />, label: "编辑基本信息" },
+    { key: "tools", icon: <ToolOutlined />, label: "工具" },
     { key: "move", icon: <SwapOutlined />, label: "移动到分组" },
     { key: "copy", icon: <CopyOutlined />, label: "复制到分组" },
     { type: "divider" },
@@ -518,12 +550,14 @@ function ImageLibraryExplorer({
 
   const folderActionItems = (): MenuProps["items"] => [
     { key: "edit", icon: <EditOutlined />, label: "编辑分组" },
+    { key: "tools", icon: <ToolOutlined />, label: "工具" },
     { type: "divider" },
     { key: "delete", icon: <DeleteOutlined />, label: "删除分组", danger: true },
   ];
 
   const onActionClick = (img: ImageModel, key: string) => {
     if (key === "edit") onEdit(img);
+    else if (key === "tools") onTools(img);
     else if (key === "move") onMove(img);
     else if (key === "copy") onCopy(img);
     else if (key === "delete") onDelete(img);
@@ -531,6 +565,7 @@ function ImageLibraryExplorer({
 
   const onFolderActionClick = (group: ImageGroup, key: string) => {
     if (key === "edit") onEditGroup(group);
+    else if (key === "tools") onToolsGroup(group);
     else if (key === "delete") onDeleteGroup(group);
   };
 
@@ -548,10 +583,14 @@ function ImageLibraryExplorer({
           </Space>
         ) : (
           <Space>
-            <Thumbnail
-              seed={row.image.thumbnail_hint || row.image.id}
-              size={36}
-            />
+            <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
+              <Thumbnail
+                seed={row.image.thumbnail_hint || row.image.id}
+                imageId={row.image.id}
+                preview
+                size={36}
+              />
+            </span>
             <span>{row.image.title || row.image.id}</span>
           </Space>
         ),
@@ -631,6 +670,11 @@ function ImageLibraryExplorer({
       columns={columns}
       dataSource={rows}
       size="middle"
+      rowSelection={{
+        selectedRowKeys,
+        onChange: (keys) => onSelectionChange(keys as string[]),
+        getCheckboxProps: (row) => ({ disabled: row.kind !== "file" }),
+      }}
       pagination={{
         pageSize: 8,
         showSizeChanger: false,
@@ -656,10 +700,18 @@ export function ImagesPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
+  const [toolsSelection, setToolsSelection] = useState<ToolSelection | undefined>(
+    undefined,
+  );
+  const [toolTarget, setToolTarget] = useState<ToolTarget | null>(null);
   const [editing, setEditing] = useState<ImageModel | null>(null);
   const [moving, setMoving] = useState<ImageModel | null>(null);
   const [copying, setCopying] = useState<ImageModel | null>(null);
   const [editingGroup, setEditingGroup] = useState<ImageGroup | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [batchMoveOpen, setBatchMoveOpen] = useState(false);
+  const [batchTagOpen, setBatchTagOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   const groupsState = useAsync(() => api.listImageGroups(), []);
   const groups = groupsState.data ?? [];
@@ -675,9 +727,19 @@ export function ImagesPage() {
   const refreshAll = () => {
     groupsState.refetch();
     imagesState.refetch();
+    setSelectedRowKeys([]);
   };
 
   const currentGroup = groups.find((g) => g.id === currentGroupId) ?? null;
+
+  // 当前目录内的图片文件（用于「开始浏览」）。
+  const currentFiles = useMemo(
+    () =>
+      currentGroupId === null
+        ? images.filter((v) => isRootImage(v, groups))
+        : images.filter((v) => v.group_id === currentGroupId),
+    [images, groups, currentGroupId],
+  );
 
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
@@ -729,6 +791,66 @@ export function ImagesPage() {
     });
   };
 
+  const confirmBatchDelete = () => {
+    const ids = selectedRowKeys.slice();
+    if (!ids.length) return;
+    modal.confirm({
+      title: "批量删除图片",
+      content: `确定要删除选中的 ${ids.length} 张图片吗？此操作不可撤销。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        const results = await Promise.allSettled(
+          ids.map((id) => api.deleteImage(id)),
+        );
+        const failed = results.filter((r) => r.status === "rejected").length;
+        if (failed) message.warning(`已删除 ${ids.length - failed} 张，${failed} 张失败`);
+        else message.success(`已删除 ${ids.length} 张`);
+        refreshAll();
+      },
+    });
+  };
+
+  const batchMove = async (groupId: string | null) => {
+    const ids = selectedRowKeys.slice();
+    if (!ids.length) return;
+    const results = await Promise.allSettled(
+      ids.map((id) => api.updateImage(id, { group_id: groupId })),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed) message.warning(`已移动 ${ids.length - failed} 张，${failed} 张失败`);
+    else message.success(`已移动 ${ids.length} 张`);
+    refreshAll();
+  };
+
+  const batchTags = async (add: string[], remove: string[]) => {
+    const items = images.filter((i) => selectedRowKeys.includes(i.id));
+    if (!items.length) return;
+    const results = await Promise.allSettled(
+      items.map((img) => {
+        const set = new Set(img.tags);
+        add.forEach((t) => set.add(t));
+        remove.forEach((t) => set.delete(t));
+        return api.updateImage(img.id, { tags: Array.from(set) });
+      }),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed) message.warning(`已更新 ${items.length - failed} 张，${failed} 张失败`);
+    else message.success(`已更新 ${items.length} 张标签`);
+    refreshAll();
+  };
+
+  // 打开「工具集合」：selection 决定显示的工具形态，target 决定作用对象。
+  const openTools = (
+    selection: ToolSelection | undefined,
+    target: ToolTarget | null,
+  ) => {
+    setToolsSelection(selection);
+    setToolTarget(target);
+    setToolsModalOpen(true);
+  };
+
   return (
     <>
       <PageHeader
@@ -736,13 +858,25 @@ export function ImagesPage() {
         subtitle="图片资源管理：分组（文件夹）、上传、标签与筛选"
         extra={
           <Space>
+            <Button icon={<ReloadOutlined />} onClick={refreshAll}>
+              刷新
+            </Button>
             <Button icon={<PictureOutlined />} onClick={() => setGroupModalOpen(true)}>
               新建分组
             </Button>
             <Button type="primary" onClick={() => setUploadModalOpen(true)}>
               上传图片
             </Button>
-            <Button onClick={() => setToolsModalOpen(true)}>工具集合</Button>
+            <Button
+              icon={<EyeOutlined />}
+              disabled={currentFiles.length === 0}
+              onClick={() => setBrowserOpen(true)}
+            >
+              开始浏览
+            </Button>
+            <Button icon={<ToolOutlined />} onClick={() => openTools(undefined, null)}>
+              工具集合
+            </Button>
           </Space>
         }
       />
@@ -780,20 +914,90 @@ export function ImagesPage() {
         />
       </Space>
 
+      {selectedRowKeys.length > 0 && (
+        <Space
+          style={{
+            marginBottom: 16,
+            padding: "8px 12px",
+            background: "rgba(64,150,255,0.08)",
+            borderRadius: 8,
+          }}
+        >
+          <span>已选 {selectedRowKeys.length} 项</span>
+          <Button
+            size="small"
+            icon={<SwapOutlined />}
+            onClick={() => setBatchMoveOpen(true)}
+          >
+            移动到分组
+          </Button>
+          <Button
+            size="small"
+            icon={<TagsOutlined />}
+            onClick={() => setBatchTagOpen(true)}
+          >
+            批量标签
+          </Button>
+          <Button
+            size="small"
+            icon={<ToolOutlined />}
+            onClick={() =>
+              openTools("multi", {
+                scope: "image",
+                selection: "multi",
+                imageIds: selectedRowKeys.slice(),
+              })
+            }
+          >
+            工具
+          </Button>
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={confirmBatchDelete}
+          >
+            批量删除
+          </Button>
+          <Button size="small" type="text" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </Space>
+      )}
+
       <AsyncBoundary state={imagesState}>
         {(list) => (
           <ImageLibraryExplorer
             images={list}
             groups={groups}
             currentGroupId={currentGroupId}
-            onEnterFolder={setCurrentGroupId}
+            selectedRowKeys={selectedRowKeys}
+            onSelectionChange={setSelectedRowKeys}
+            onEnterFolder={(gid) => {
+              setSelectedRowKeys([]);
+              setCurrentGroupId(gid);
+            }}
             onOpenDetail={setSelected}
             onEdit={setEditing}
             onMove={setMoving}
             onCopy={setCopying}
             onDelete={confirmDelete}
+            onTools={(img) =>
+              openTools(undefined, {
+                scope: "image",
+                selection: "single",
+                imageIds: [img.id],
+              })
+            }
             onEditGroup={setEditingGroup}
             onDeleteGroup={confirmDeleteGroup}
+            onToolsGroup={(group) =>
+              openTools("multi", {
+                scope: "image",
+                selection: "multi",
+                groupIds: [group.id],
+              })
+            }
           />
         )}
       </AsyncBoundary>
@@ -872,10 +1076,44 @@ export function ImagesPage() {
           }
         }}
       />
+      <GroupPickerModal
+        open={batchMoveOpen}
+        title={`移动选中的 ${selectedRowKeys.length} 张图片到分组`}
+        okText="移动"
+        groups={groups}
+        onClose={() => setBatchMoveOpen(false)}
+        onConfirm={async (groupId) => {
+          await batchMove(groupId);
+        }}
+      />
+      <BatchTagModal
+        open={batchTagOpen}
+        count={selectedRowKeys.length}
+        onClose={() => setBatchTagOpen(false)}
+        onApply={batchTags}
+      />
+      <MediaBrowser
+        open={browserOpen}
+        items={currentFiles.map((f) => ({
+          id: f.id,
+          title: f.title || f.id,
+          kind: "image" as const,
+        }))}
+        startIndex={0}
+        groups={groups}
+        ungroupedName={UNGROUPED_NAME}
+        onClose={() => setBrowserOpen(false)}
+        onMove={async (id, groupId) => {
+          await api.updateImage(id, { group_id: groupId });
+        }}
+        onDelete={(id) => api.deleteImage(id)}
+        onChanged={refreshAll}
+      />
       <ToolsModal
         open={toolsModalOpen}
         onClose={() => setToolsModalOpen(false)}
         scope="image"
+        selection={toolsSelection}
         onSelectTool={(tool) => {
           setToolsModalOpen(false);
           setActiveTool(tool);
@@ -883,8 +1121,11 @@ export function ImagesPage() {
       />
       {activeTool?.launch({
         open: true,
-        onClose: () => setActiveTool(null),
-        context: { images, onDone: refreshAll },
+        onClose: () => {
+          setActiveTool(null);
+          setToolTarget(null);
+        },
+        context: { images, onDone: refreshAll, target: toolTarget ?? undefined },
       })}
     </>
   );

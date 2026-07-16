@@ -6,25 +6,53 @@
  */
 import { Alert, Button, Card, Col, Empty, Modal, Row, Space, Spin, Tag } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
+import { useNavigate } from "react-router-dom";
 import { HOST_API_VERSION } from "./host";
 import { useExternalTools, useTools } from "./hooks";
-import type { ToolDefinition, ToolScope } from "./types";
+import type { ToolDefinition, ToolScope, ToolSelection } from "./types";
+
+/** 工具是否匹配所需作用形态（未声明 selections 视为同时支持 single/multi）。 */
+function matchesSelection(tool: ToolDefinition, selection?: ToolSelection): boolean {
+  if (!selection) return true;
+  const sels = tool.selections ?? ["single", "multi"];
+  return sels.includes(selection);
+}
 
 export function ToolsModal({
   open,
   onClose,
   scope,
+  selection,
   onSelectTool,
 }: {
   open: boolean;
   onClose: () => void;
   scope: ToolScope;
+  /**
+   * 需要的作用形态：
+   * - "single"：仅显示单资源工具（+ 同时支持 multi 的工具）；
+   * - "multi"：仅显示多资源/分组工具；
+   * - 省略：不按形态过滤（如库页顶部「工具集合」入口）。
+   */
+  selection?: ToolSelection;
   onSelectTool: (tool: ToolDefinition) => void;
 }) {
-  const tools = useTools(scope);
+  const navigate = useNavigate();
+  const allTools = useTools(scope);
+  const tools = allTools.filter((t) => matchesSelection(t, selection));
   const { loading, result, reload } = useExternalTools();
   const failed = result?.failed.filter((f) => f.id !== "*") ?? [];
   const manifestError = result?.failed.find((f) => f.id === "*");
+
+  // 整页工具跳转到独立路由；弹窗工具沿用宿主的内联启动。
+  const handleSelect = (tool: ToolDefinition) => {
+    if (tool.ui === "page") {
+      onClose();
+      navigate(`/tools/${encodeURIComponent(tool.id)}`);
+    } else {
+      onSelectTool(tool);
+    }
+  };
 
   return (
     <Modal
@@ -98,7 +126,7 @@ export function ToolsModal({
               <Col key={tool.id} xs={24} sm={12}>
                 <Card
                   hoverable={!disabled}
-                  onClick={() => !disabled && onSelectTool(tool)}
+                  onClick={() => !disabled && handleSelect(tool)}
                   style={{
                     height: "100%",
                     opacity: disabled ? 0.5 : 1,

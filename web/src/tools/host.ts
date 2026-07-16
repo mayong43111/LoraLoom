@@ -21,6 +21,7 @@ import {
   Empty,
   Flex,
   Form,
+  Image,
   Input,
   InputNumber,
   List,
@@ -37,6 +38,7 @@ import {
   Statistic,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -65,7 +67,35 @@ import { api } from "@/api/client";
 import { registerTool, unregisterTool } from "./registry";
 
 /** 宿主 SDK 版本。外部工具可据此做兼容性判断。 */
-export const HOST_API_VERSION = "1.0.0";
+export const HOST_API_VERSION = "1.1.0";
+
+/**
+ * 统一工具后端调用接口。插件通过它调用自身 handler.py 暴露的处理逻辑：
+ * `POST /api/tools/{toolId}/invoke`，body 为 `{ action, payload }`。
+ * 返回 handler 的 JSON 结果；失败时抛出带后端 detail 的 Error。
+ */
+export async function invokeTool<T = unknown>(
+  toolId: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<T> {
+  const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/invoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, payload }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body && body.detail) detail = body.detail;
+    } catch {
+      // 保留默认 detail
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
 
 /**
  * 暴露给外部工具的 antd 组件精选集。为保留 tree-shaking、控制体积，仅提供
@@ -83,6 +113,7 @@ const antd = {
   Empty,
   Flex,
   Form,
+  Image,
   Input,
   InputNumber,
   List,
@@ -99,6 +130,7 @@ const antd = {
   Statistic,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -141,6 +173,8 @@ export interface DatasetToolkitGlobal {
   api: typeof api;
   /** `React.createElement` 快捷方式。 */
   h: typeof React.createElement;
+  /** 统一工具后端调用接口。 */
+  invokeTool: typeof invokeTool;
   /** 注册工具。 */
   registerTool: typeof registerTool;
   /** 注销工具。 */
@@ -162,6 +196,7 @@ export function installHostSDK(): void {
     icons,
     api,
     h: React.createElement,
+    invokeTool,
     registerTool,
     unregisterTool,
   };

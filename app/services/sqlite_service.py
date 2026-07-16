@@ -349,13 +349,20 @@ class SqliteDatasetService(DatasetService):
             )
             if grp is None:
                 raise ServiceError(f"分组不存在: {payload.group_id}")
+        flags: list[QualityFlag] = []
+        for flag in payload.quality_flags:
+            try:
+                flags.append(QualityFlag(flag))
+            except ValueError:
+                continue
         image = Image(
             id=f"img-{uuid4().hex[:12]}",
             image_path=payload.path or f"workspace/images/{payload.title}",
             sha256=f"{uuid4().int & ((1 << 64) - 1):016x}",
             width=payload.width,
             height=payload.height,
-            quality_score=0.0,
+            quality_score=payload.quality_score,
+            quality_flags=flags,
             orientation=Orientation.UNKNOWN,
             usability=Usability.NEEDS_REVIEW,
             review_status=ReviewStatus.AUTO,
@@ -364,6 +371,8 @@ class SqliteDatasetService(DatasetService):
             group_id=payload.group_id,
             tags=list(payload.tags),
             thumbnail_hint=payload.title,
+            frame_target_timestamp=payload.frame_target_timestamp,
+            frame_actual_timestamp=payload.frame_actual_timestamp,
         )
         self._write(
             "INSERT INTO images "
@@ -405,6 +414,7 @@ class SqliteDatasetService(DatasetService):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: object = UNSET,
     ) -> Image:
         image = self.get_image(image_id)
@@ -413,6 +423,8 @@ class SqliteDatasetService(DatasetService):
             image.title = title
         if tags is not None:
             image.tags = list(tags)
+        if caption is not None:
+            image.caption = caption
         new_group = old_group
         if group_id is not UNSET and group_id != old_group:
             if group_id is not None:
@@ -650,6 +662,7 @@ class SqliteDatasetService(DatasetService):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: object = UNSET,
     ) -> Video:
         video = self.get_video(video_id)
@@ -658,6 +671,8 @@ class SqliteDatasetService(DatasetService):
             video.title = title
         if tags is not None:
             video.tags = list(tags)
+        if caption is not None:
+            video.caption = caption
         new_group = old_group
         if group_id is not UNSET and group_id != old_group:
             if group_id is not None:

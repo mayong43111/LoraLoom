@@ -1,0 +1,9 @@
+{
+  "id": "example.hello",
+  "name": "示例插件",
+  "description": "演示前端整页 + 后端 handler 的最小插件",
+  "scopes": ["global"],
+  "ui": "page",
+  "entry": "index.js",
+  "backend": "handler.py"
+}

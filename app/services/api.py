@@ -70,6 +70,11 @@ class ImageCreate:
     width: int = 0
     height: int = 0
     path: str = ""
+    # 抽帧插件在提交时携带的质量与时间戳信息（普通上传保持默认）。
+    quality_score: float = 0.0
+    quality_flags: list[str] = field(default_factory=list)
+    frame_target_timestamp: float | None = None
+    frame_actual_timestamp: float | None = None
 
 
 @dataclass(slots=True)
@@ -166,6 +171,7 @@ class DatasetService(ABC):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: Any = UNSET,
     ) -> Image:
         """编辑图片基本信息或移动分组。
@@ -235,6 +241,7 @@ class DatasetService(ABC):
         *,
         title: str | None = None,
         tags: list[str] | None = None,
+        caption: str | None = None,
         group_id: Any = UNSET,
     ) -> Video:
         """编辑视频基本信息或移动分组。

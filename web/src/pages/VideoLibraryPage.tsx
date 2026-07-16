@@ -16,6 +16,7 @@ import {
   Drawer,
   Dropdown,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
@@ -29,10 +30,14 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   FolderOutlined,
   HomeOutlined,
   MoreOutlined,
+  ReloadOutlined,
   SwapOutlined,
+  TagsOutlined,
+  ToolOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
@@ -44,11 +49,13 @@ import { useAsync } from "@/api/useAsync";
 import { useLabels } from "@/api/labels";
 import { AsyncBoundary } from "@/components/AsyncBoundary";
 import { PageHeader } from "@/components/PageHeader";
+import { BatchTagModal } from "@/components/BatchTagModal";
 import { EnumTag } from "@/components/EnumTag";
 import { VIDEO_SOURCE_COLOR } from "@/colors";
 import type { Video, VideoFilterParams, VideoGroup } from "@/api/types";
 import { ToolsModal } from "@/tools";
-import type { ToolDefinition } from "@/tools";
+import type { ToolDefinition, ToolSelection, ToolTarget } from "@/tools";
+import { MediaBrowser } from "@/components/MediaBrowser";
 
 const ANY = "__any__";
 const UNGROUPED_NAME = "未分组";
@@ -66,6 +73,52 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * 视频封面缩略图：首次访问由后端 ffmpeg 生成并缓存，之后复用缓存文件。
+ * 加载失败（无真实文件等）时回退为摄像机图标。支持点击全屏预览。
+ */
+function VideoThumb({ videoId, size = 40, preview = false }: { videoId: string; size?: number; preview?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const src = `/api/videos/${encodeURIComponent(videoId)}/thumbnail`;
+  if (failed) {
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 6,
+          background: "#1b1e26",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <VideoCameraOutlined style={{ color: "#4c8dff" }} />
+      </div>
+    );
+  }
+  if (preview) {
+    return (
+      <Image
+        src={src}
+        width={size}
+        height={size}
+        onError={() => setFailed(true)}
+        style={{ borderRadius: 6, objectFit: "cover", background: "#1b1e26" }}
+        preview={{ mask: "预览" }}
+      />
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      onError={() => setFailed(true)}
+      style={{ width: size, height: size, borderRadius: 6, objectFit: "cover", background: "#1b1e26", display: "block" }}
+    />
+  );
 }
 
 function EnumSelect({
@@ -104,6 +157,9 @@ function VideoDetail({
 }) {
   return (
     <Descriptions column={1} size="small" bordered>
+      <Descriptions.Item label="封面">
+        <VideoThumb videoId={video.id} size={200} preview />
+      </Descriptions.Item>
       <Descriptions.Item label="ID">{video.id}</Descriptions.Item>
       <Descriptions.Item label="名称">{video.title}</Descriptions.Item>
       <Descriptions.Item label="所属分组">{groupName}</Descriptions.Item>
@@ -127,6 +183,9 @@ function VideoDetail({
       <Descriptions.Item label="编码">{video.codec}</Descriptions.Item>
       <Descriptions.Item label="大小">
         {formatSize(video.size_bytes)}
+      </Descriptions.Item>
+      <Descriptions.Item label="Caption">
+        {video.caption || "无"}
       </Descriptions.Item>
       <Descriptions.Item label="标签">
         {video.tags.length ? (
@@ -405,6 +464,7 @@ function EditVideoModal({
       await api.updateVideo(video.id, {
         title: values.title,
         tags: values.tags ?? [],
+        caption: values.caption ?? "",
       });
       message.success("已保存");
       onSaved();
@@ -429,7 +489,11 @@ function EditVideoModal({
         form={form}
         layout="vertical"
         preserve={false}
-        initialValues={{ title: video?.title, tags: video?.tags ?? [] }}
+        initialValues={{
+          title: video?.title,
+          tags: video?.tags ?? [],
+          caption: video?.caption ?? "",
+        }}
       >
         <Form.Item
           name="title"
@@ -443,6 +507,13 @@ function EditVideoModal({
             mode="tags"
             placeholder="输入后回车添加多个标签"
             tokenSeparators={[","]}
+          />
+        </Form.Item>
+        <Form.Item name="caption" label="Caption（训练文本）">
+          <Input.TextArea
+            rows={4}
+            placeholder="用于训练的视频描述文本"
+            showCount
           />
         </Form.Item>
         <Descriptions column={1} size="small">
@@ -530,26 +601,34 @@ function VideoLibraryExplorer({
   videos,
   groups,
   currentGroupId,
+  selectedRowKeys,
+  onSelectionChange,
   onEnterFolder,
   onOpenDetail,
   onEdit,
   onMove,
   onCopy,
   onDelete,
+  onTools,
   onEditGroup,
   onDeleteGroup,
+  onToolsGroup,
 }: {
   videos: Video[];
   groups: VideoGroup[];
   currentGroupId: string | null;
+  selectedRowKeys: string[];
+  onSelectionChange: (keys: string[]) => void;
   onEnterFolder: (groupId: string) => void;
   onOpenDetail: (v: Video) => void;
   onEdit: (v: Video) => void;
   onMove: (v: Video) => void;
   onCopy: (v: Video) => void;
   onDelete: (v: Video) => void;
+  onTools: (v: Video) => void;
   onEditGroup: (group: VideoGroup) => void;
   onDeleteGroup: (group: VideoGroup) => void;
+  onToolsGroup: (group: VideoGroup) => void;
 }) {
   const rows: ExplorerRow[] = useMemo(() => {
     if (currentGroupId === null) {
@@ -573,6 +652,7 @@ function VideoLibraryExplorer({
 
   const actionItems = (): MenuProps["items"] => [
     { key: "edit", icon: <EditOutlined />, label: "编辑基本信息" },
+    { key: "tools", icon: <ToolOutlined />, label: "工具" },
     { key: "move", icon: <SwapOutlined />, label: "移动到分组" },
     { key: "copy", icon: <CopyOutlined />, label: "复制到分组" },
     { type: "divider" },
@@ -581,6 +661,7 @@ function VideoLibraryExplorer({
 
   const onActionClick = (video: Video, key: string) => {
     if (key === "edit") onEdit(video);
+    else if (key === "tools") onTools(video);
     else if (key === "move") onMove(video);
     else if (key === "copy") onCopy(video);
     else if (key === "delete") onDelete(video);
@@ -588,12 +669,14 @@ function VideoLibraryExplorer({
 
   const folderActionItems = (): MenuProps["items"] => [
     { key: "edit", icon: <EditOutlined />, label: "编辑分组" },
+    { key: "tools", icon: <ToolOutlined />, label: "工具" },
     { type: "divider" },
     { key: "delete", icon: <DeleteOutlined />, label: "删除分组", danger: true },
   ];
 
   const onFolderActionClick = (group: VideoGroup, key: string) => {
     if (key === "edit") onEditGroup(group);
+    else if (key === "tools") onToolsGroup(group);
     else if (key === "delete") onDeleteGroup(group);
   };
 
@@ -611,7 +694,9 @@ function VideoLibraryExplorer({
           </Space>
         ) : (
           <Space>
-            <VideoCameraOutlined style={{ color: "#4c8dff" }} />
+            <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}>
+              <VideoThumb videoId={row.video.id} size={40} preview />
+            </span>
             <span>{row.video.title}</span>
           </Space>
         ),
@@ -711,6 +796,11 @@ function VideoLibraryExplorer({
       columns={columns}
       dataSource={rows}
       size="middle"
+      rowSelection={{
+        selectedRowKeys,
+        onChange: (keys) => onSelectionChange(keys as string[]),
+        getCheckboxProps: (row) => ({ disabled: row.kind !== "file" }),
+      }}
       pagination={{
         pageSize: 8,
         showSizeChanger: false,
@@ -736,10 +826,18 @@ export function VideoLibraryPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
+  const [toolsSelection, setToolsSelection] = useState<ToolSelection | undefined>(
+    undefined,
+  );
+  const [toolTarget, setToolTarget] = useState<ToolTarget | null>(null);
   const [editing, setEditing] = useState<Video | null>(null);
   const [moving, setMoving] = useState<Video | null>(null);
   const [copying, setCopying] = useState<Video | null>(null);
   const [editingGroup, setEditingGroup] = useState<VideoGroup | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [batchMoveOpen, setBatchMoveOpen] = useState(false);
+  const [batchTagOpen, setBatchTagOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   const groupsState = useAsync(() => api.listVideoGroups(), []);
   const groups = groupsState.data ?? [];
@@ -755,9 +853,19 @@ export function VideoLibraryPage() {
   const refreshAll = () => {
     groupsState.refetch();
     videosState.refetch();
+    setSelectedRowKeys([]);
   };
 
   const currentGroup = groups.find((g) => g.id === currentGroupId) ?? null;
+
+  // 当前目录内的视频文件（用于「开始浏览」）。
+  const currentFiles = useMemo(
+    () =>
+      currentGroupId === null
+        ? videos.filter((v) => isRootVideo(v, groups))
+        : videos.filter((v) => v.group_id === currentGroupId),
+    [videos, groups, currentGroupId],
+  );
 
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
@@ -809,6 +917,66 @@ export function VideoLibraryPage() {
     });
   };
 
+  const confirmBatchDelete = () => {
+    const ids = selectedRowKeys.slice();
+    if (!ids.length) return;
+    modal.confirm({
+      title: "批量删除视频",
+      content: `确定要删除选中的 ${ids.length} 个视频吗？此操作不可撤销。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        const results = await Promise.allSettled(
+          ids.map((id) => api.deleteVideo(id)),
+        );
+        const failed = results.filter((r) => r.status === "rejected").length;
+        if (failed) message.warning(`已删除 ${ids.length - failed} 个，${failed} 个失败`);
+        else message.success(`已删除 ${ids.length} 个`);
+        refreshAll();
+      },
+    });
+  };
+
+  const batchMove = async (groupId: string | null) => {
+    const ids = selectedRowKeys.slice();
+    if (!ids.length) return;
+    const results = await Promise.allSettled(
+      ids.map((id) => api.updateVideo(id, { group_id: groupId })),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed) message.warning(`已移动 ${ids.length - failed} 个，${failed} 个失败`);
+    else message.success(`已移动 ${ids.length} 个`);
+    refreshAll();
+  };
+
+  const batchTags = async (add: string[], remove: string[]) => {
+    const items = videos.filter((v) => selectedRowKeys.includes(v.id));
+    if (!items.length) return;
+    const results = await Promise.allSettled(
+      items.map((v) => {
+        const set = new Set(v.tags);
+        add.forEach((t) => set.add(t));
+        remove.forEach((t) => set.delete(t));
+        return api.updateVideo(v.id, { tags: Array.from(set) });
+      }),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed) message.warning(`已更新 ${items.length - failed} 个，${failed} 个失败`);
+    else message.success(`已更新 ${items.length} 个标签`);
+    refreshAll();
+  };
+
+  // 打开「工具集合」：selection 决定显示的工具形态，target 决定作用对象。
+  const openTools = (
+    selection: ToolSelection | undefined,
+    target: ToolTarget | null,
+  ) => {
+    setToolsSelection(selection);
+    setToolTarget(target);
+    setToolsModalOpen(true);
+  };
+
   return (
     <>
       <PageHeader
@@ -816,11 +984,23 @@ export function VideoLibraryPage() {
         subtitle="视频资源管理：分组（文件夹）、上传、标签与筛选"
         extra={
           <Space>
+            <Button icon={<ReloadOutlined />} onClick={refreshAll}>
+              刷新
+            </Button>
             <Button onClick={() => setGroupModalOpen(true)}>新建分组</Button>
             <Button type="primary" onClick={() => setUploadModalOpen(true)}>
               上传视频
             </Button>
-            <Button onClick={() => setToolsModalOpen(true)}>工具集合</Button>
+            <Button
+              icon={<EyeOutlined />}
+              disabled={currentFiles.length === 0}
+              onClick={() => setBrowserOpen(true)}
+            >
+              开始浏览
+            </Button>
+            <Button icon={<ToolOutlined />} onClick={() => openTools(undefined, null)}>
+              工具集合
+            </Button>
           </Space>
         }
       />
@@ -865,20 +1045,90 @@ export function VideoLibraryPage() {
         />
       </Space>
 
+      {selectedRowKeys.length > 0 && (
+        <Space
+          style={{
+            marginBottom: 16,
+            padding: "8px 12px",
+            background: "rgba(64,150,255,0.08)",
+            borderRadius: 8,
+          }}
+        >
+          <span>已选 {selectedRowKeys.length} 项</span>
+          <Button
+            size="small"
+            icon={<SwapOutlined />}
+            onClick={() => setBatchMoveOpen(true)}
+          >
+            移动到分组
+          </Button>
+          <Button
+            size="small"
+            icon={<TagsOutlined />}
+            onClick={() => setBatchTagOpen(true)}
+          >
+            批量标签
+          </Button>
+          <Button
+            size="small"
+            icon={<ToolOutlined />}
+            onClick={() =>
+              openTools("multi", {
+                scope: "video",
+                selection: "multi",
+                videoIds: selectedRowKeys.slice(),
+              })
+            }
+          >
+            工具
+          </Button>
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={confirmBatchDelete}
+          >
+            批量删除
+          </Button>
+          <Button size="small" type="text" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </Space>
+      )}
+
       <AsyncBoundary state={videosState}>
         {(list) => (
           <VideoLibraryExplorer
             videos={list}
             groups={groups}
             currentGroupId={currentGroupId}
-            onEnterFolder={setCurrentGroupId}
+            selectedRowKeys={selectedRowKeys}
+            onSelectionChange={setSelectedRowKeys}
+            onEnterFolder={(gid) => {
+              setSelectedRowKeys([]);
+              setCurrentGroupId(gid);
+            }}
             onOpenDetail={setSelected}
             onEdit={setEditing}
             onMove={setMoving}
             onCopy={setCopying}
             onDelete={confirmDelete}
+            onTools={(video) =>
+              openTools(undefined, {
+                scope: "video",
+                selection: "single",
+                videoIds: [video.id],
+              })
+            }
             onEditGroup={setEditingGroup}
             onDeleteGroup={confirmDeleteGroup}
+            onToolsGroup={(group) =>
+              openTools("multi", {
+                scope: "video",
+                selection: "multi",
+                groupIds: [group.id],
+              })
+            }
           />
         )}
       </AsyncBoundary>
@@ -955,10 +1205,44 @@ export function VideoLibraryPage() {
           }
         }}
       />
+      <GroupPickerModal
+        open={batchMoveOpen}
+        title={`移动选中的 ${selectedRowKeys.length} 个视频到分组`}
+        okText="移动"
+        groups={groups}
+        onClose={() => setBatchMoveOpen(false)}
+        onConfirm={async (groupId) => {
+          await batchMove(groupId);
+        }}
+      />
+      <BatchTagModal
+        open={batchTagOpen}
+        count={selectedRowKeys.length}
+        onClose={() => setBatchTagOpen(false)}
+        onApply={batchTags}
+      />
+      <MediaBrowser
+        open={browserOpen}
+        items={currentFiles.map((f) => ({
+          id: f.id,
+          title: f.title || f.id,
+          kind: "video" as const,
+        }))}
+        startIndex={0}
+        groups={groups}
+        ungroupedName={UNGROUPED_NAME}
+        onClose={() => setBrowserOpen(false)}
+        onMove={async (id, groupId) => {
+          await api.updateVideo(id, { group_id: groupId });
+        }}
+        onDelete={(id) => api.deleteVideo(id)}
+        onChanged={refreshAll}
+      />
       <ToolsModal
         open={toolsModalOpen}
         onClose={() => setToolsModalOpen(false)}
         scope="video"
+        selection={toolsSelection}
         onSelectTool={(tool) => {
           setToolsModalOpen(false);
           setActiveTool(tool);
@@ -966,8 +1250,11 @@ export function VideoLibraryPage() {
       />
       {activeTool?.launch({
         open: true,
-        onClose: () => setActiveTool(null),
-        context: { videos, onDone: refreshAll },
+        onClose: () => {
+          setActiveTool(null);
+          setToolTarget(null);
+        },
+        context: { videos, onDone: refreshAll, target: toolTarget ?? undefined },
       })}
     </>
   );

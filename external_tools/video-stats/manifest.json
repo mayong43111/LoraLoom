@@ -1,7 +1,0 @@
-{
-  "id": "external.video-stats",
-  "name": "视频统计",
-  "description": "统计当前视频数量与总时长（外部动态注入示例）",
-  "scopes": ["video"],
-  "entry": "index.js"
-}
