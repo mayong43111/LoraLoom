@@ -13,6 +13,7 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 from app.domain.enums import (
@@ -54,6 +55,7 @@ class SqliteDatasetService(DatasetService):
     """使用 SQLite 持久化的服务实现。"""
 
     def __init__(self, db_path: str = "workspace/dataset.sqlite") -> None:
+        self.db_path = str(Path(db_path).resolve())
         self._conn = db.connect(db_path)
         # 连接允许跨线程使用（FastAPI 线程池），用可重入锁串行化访问。
         self._lock = threading.RLock()

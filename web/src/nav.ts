@@ -15,14 +15,6 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  {
-    key: "browser",
-    path: "/browser",
-    title: "浏览器",
-    subtitle: "网页采集",
-    mvp: false,
-    phase: "第二阶段",
-  },
   { key: "videos", path: "/videos", title: "视频库", subtitle: "视频管理与抽帧", mvp: true },
   { key: "images", path: "/images", title: "图片库", subtitle: "浏览与筛选", mvp: true },
   { key: "export", path: "/export", title: "数据集", subtitle: "训练集导出", mvp: true },

@@ -6,6 +6,11 @@
  * 因此这里统一用 string 作为枚举字段类型，避免前后端重复维护取值集合。
  */
 
+export interface DataSourceInfo {
+  kind: string;
+  path: string | null;
+}
+
 export interface DatasetStats {
   image_total: number;
   image_candidate: number;

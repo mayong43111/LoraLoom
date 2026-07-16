@@ -1,7 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "@/layout/AppLayout";
 import { ImportPage } from "@/pages/ImportPage";
-import { BrowserPage } from "@/pages/BrowserPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
 import { VideoLibraryPage } from "@/pages/VideoLibraryPage";
 import { ImagesPage } from "@/pages/ImagesPage";
@@ -19,7 +18,6 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/videos" replace />} />
         <Route path="/import" element={<ImportPage />} />
-        <Route path="/browser" element={<BrowserPage />} />
         <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/videos" element={<VideoLibraryPage />} />
         <Route path="/images" element={<ImagesPage />} />

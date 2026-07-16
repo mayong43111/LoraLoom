@@ -41,6 +41,10 @@ _INFO_MIN = 4.0        # 灰度直方图熵；低于视为低信息量
 # 单次抽取解码的最大帧数上限，防止超长区间耗尽内存。
 _MAX_RANGE_FRAMES = 12000
 
+# 扫描阶段解码宽度：质量评分与邻近择优只需相对清晰度，降分辨率可大幅减少
+# 解码/编码/内存开销；原图留到 commit 阶段仅对保留帧按时间点重取。
+_SCAN_W = 480
+
 # 进程内会话暂存：session_id → {video 元信息, frames: {frame_id: {...}}}。
 _SESSIONS: dict[str, dict[str, Any]] = {}
 
@@ -254,11 +258,16 @@ def _clamp01(x: float) -> float:
     return 0.0 if x < 0 else (1.0 if x > 1 else x)
 
 
-def _score(jpeg: bytes) -> tuple[float, list[str], bool]:
-    """返回 (质量分 0~1, 质量标记列表, 是否合格)。"""
+def _score(jpeg: bytes, blur_scale: float = 1.0) -> tuple[float, list[str], bool]:
+    """返回 (质量分 0~1, 质量标记列表, 是否合格)。
+
+    ``blur_scale`` 把低分辨率扫描帧测得的拉普拉斯方差归一化回原分辨率语义
+    （降采样会削弱高频细节、拉低方差），默认 1.0 不校正。
+    """
     m = _metrics(jpeg)
+    blur = m["blur"] * blur_scale
     flags: list[str] = []
-    if m["blur"] < _BLUR_MIN:
+    if blur < _BLUR_MIN:
         flags.append("blurry")
     if m["brightness"] < _DARK_MAX:
         flags.append("dark")
@@ -269,7 +278,7 @@ def _score(jpeg: bytes) -> tuple[float, list[str], bool]:
     if m["entropy"] < _INFO_MIN:
         flags.append("low_information")
 
-    s_blur = _clamp01(m["blur"] / 300.0)
+    s_blur = _clamp01(blur / 300.0)
     s_bright = 1.0 - min(abs(m["brightness"] - 0.5) / 0.5, 1.0)
     s_sat = _clamp01(m["saturation"] / 0.4)
     s_info = _clamp01(m["entropy"] / 6.0)
@@ -349,10 +358,18 @@ def _act_extract(payload: dict[str, Any], service: Any) -> dict[str, Any]:
     if span * fps > _MAX_RANGE_FRAMES:
         raise ValueError("所选区间过长，请缩短范围或增大间隔后重试")
 
-    frames_bytes = _decode_range(video.path, start, span, max_w=None)
-    n = len(frames_bytes)
+    # 扫描阶段按较低分辨率解码整段：质量评分与邻近择优只需相对清晰度，
+    # 无需原分辨率。原图留到 commit 阶段仅对用户保留的帧按时间点重取，
+    # 避免一次性解码/驻留成千上万张原分辨率帧。
+    scan_frames = _decode_range(video.path, start, span, max_w=_SCAN_W)
+    n = len(scan_frames)
     if n == 0:
         raise ValueError("解码失败：未从所选区间获得任何帧")
+
+    # 降采样会削弱高频细节、拉低拉普拉斯方差；按分辨率比例线性归一化，
+    # 使模糊阈值仍对齐原分辨率语义（原宽未知或本就 ≤ 扫描宽度时不校正）。
+    orig_w = int(video.width or 0)
+    blur_scale = (orig_w / _SCAN_W) if orig_w > _SCAN_W else 1.0
 
     def ts(idx: int) -> float:
         return round(start + idx * f, 3)
@@ -362,7 +379,7 @@ def _act_extract(payload: dict[str, Any], service: Any) -> dict[str, Any]:
     def evaluate(idx: int) -> tuple[float, list[str], bool]:
         cached = metric_cache.get(idx)
         if cached is None:
-            cached = _score(frames_bytes[idx])
+            cached = _score(scan_frames[idx], blur_scale)
             metric_cache[idx] = cached
         return cached
 
@@ -376,8 +393,6 @@ def _act_extract(payload: dict[str, Any], service: Any) -> dict[str, Any]:
 
     used: set[int] = set()
     session_id = f"fx-{uuid.uuid4().hex[:12]}"
-    session_tmp_dir = _TMP_ROOT / session_id
-    session_tmp_dir.mkdir(parents=True, exist_ok=True)
     frames_out: list[dict[str, Any]] = []
 
     for k, target_idx in enumerate(sample_indices):
@@ -420,10 +435,7 @@ def _act_extract(payload: dict[str, Any], service: Any) -> dict[str, Any]:
             chosen_score, chosen_flags, _ = evaluate(target_idx)
 
         frame_id = f"{session_id}-{k:04d}"
-        full_jpeg = frames_bytes[actual_idx]
-        # 会话帧写入临时会话目录，避免原图字节常驻内存。
-        frame_path = session_tmp_dir / f"{frame_id}.jpg"
-        frame_path.write_bytes(full_jpeg)
+        # 缩略图直接由扫描用的低分辨率帧生成；原图不在抽取阶段落盘。
         frames_out.append(
             {
                 "frame_id": frame_id,
@@ -432,9 +444,9 @@ def _act_extract(payload: dict[str, Any], service: Any) -> dict[str, Any]:
                 "status": status,
                 "quality_score": chosen_score,
                 "quality_flags": chosen_flags,
-                "thumb": _thumb_data_url(full_jpeg),
+                "thumb": _thumb_data_url(scan_frames[actual_idx]),
                 "_frame_index": actual_idx,
-                "_full_path": str(frame_path),
+                "_full_path": None,
             }
         )
 
@@ -503,8 +515,8 @@ def _act_commit(payload: dict[str, Any], service: Any) -> dict[str, Any]:
 
     _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 抽取阶段已按原分辨率解码并评分，选中帧的原图暂存在会话临时目录中，
-    # 此处直接把临时文件移入图片库，无需再次调用 ffmpeg。
+    # 抽取阶段仅按低分辨率扫描评分、不落原图；此处对用户保留的帧按时间点
+    # 重新解码取原分辨率画面（旧会话若残留临时文件则直接移动复用）。
     created = 0
     for fid in accepted_ids:
         frame = session["frames"].get(fid)

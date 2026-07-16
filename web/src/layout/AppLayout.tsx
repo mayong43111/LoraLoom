@@ -1,7 +1,8 @@
-import { Layout, Menu, Tag, Typography } from "antd";
+import { Layout, Menu, Tag, Tooltip, Typography } from "antd";
 import { useLocation, useNavigate, type NavigateFunction } from "react-router-dom";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NAV_ITEMS } from "@/nav";
+import { api } from "@/api/client";
 
 const { Sider, Header, Content } = Layout;
 
@@ -28,6 +29,23 @@ function buildMenuItems(navigate: NavigateFunction) {
 export function AppLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [dataSource, setDataSource] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getDataSource()
+      .then((info) => {
+        if (alive) setDataSource(info.path);
+      })
+      .catch(() => {
+        if (alive) setDataSource(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const selectedKey =
     NAV_ITEMS.find(
       (item) =>
@@ -71,7 +89,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
           }}
         >
           <Typography.Text strong>LoRA 训练数据集</Typography.Text>
-          <Typography.Text type="secondary">mock 数据源</Typography.Text>
+          {dataSource && (
+            <Tooltip title={dataSource}>
+              <Typography.Text
+                type="secondary"
+                style={{ maxWidth: 480 }}
+                ellipsis={{ tooltip: false }}
+              >
+                数据位置：{dataSource}
+              </Typography.Text>
+            </Tooltip>
+          )}
         </Header>
         <Content style={{ padding: 24, overflow: "auto" }}>{children}</Content>
       </Layout>

@@ -7,6 +7,7 @@
 
 import type {
   DatasetStats,
+  DataSourceInfo,
   DownloadTask,
   EnumMetadata,
   FrameJob,
@@ -71,6 +72,7 @@ function buildQuery(params: Record<string, string | undefined>): string {
 
 export const api = {
   getEnumMetadata: () => request<EnumMetadata>("/meta/enums"),
+  getDataSource: () => request<DataSourceInfo>("/meta/source"),
   getStats: () => request<DatasetStats>("/stats"),
   listImportBatches: () => request<ImportBatch[]>("/import-batches"),
   listDownloads: () => request<DownloadTask[]>("/downloads"),

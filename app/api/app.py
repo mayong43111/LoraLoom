@@ -84,6 +84,13 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/meta/source")
+def get_data_source(service: DatasetService = Depends(get_service)) -> dict[str, Any]:
+    """返回当前数据源信息（SQLite 数据库文件的绝对路径），供前端展示。"""
+    path = getattr(service, "db_path", None)
+    return {"kind": "sqlite", "path": path}
+
+
 # -- Dashboard --------------------------------------------------------------
 @app.get("/api/stats")
 def get_stats(service: DatasetService = Depends(get_service)) -> Any:
