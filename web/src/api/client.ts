@@ -17,6 +17,8 @@ import type {
   AnnotateResponse,
   AnnotatePayload,
   AnnotationConfig,
+  ExportOptionsResponse,
+  ExportPayload,
   ImageCreatePayload,
   ImageFilterParams,
   ImageGroup,
@@ -252,4 +254,32 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  getExportOptions: () =>
+    request<ExportOptionsResponse>("/datasets/export/options"),
+  exportDataset: async (
+    datasetId: string,
+    payload: ExportPayload,
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${API_BASE}/datasets/${datasetId}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = body?.detail ?? detail;
+      } catch {
+        /* 忽略非 JSON 错误体 */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+    const filename = match
+      ? decodeURIComponent(match[1])
+      : `${datasetId}_qwen_image_lora.zip`;
+    return { blob: await res.blob(), filename };
+  },
 };

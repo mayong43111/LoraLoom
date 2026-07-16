@@ -85,6 +85,39 @@ export interface AnnotateResponse {
   results: AnnotateResult[];
 }
 
+/** 导出（Qwen-Image / ai-toolkit）可选项。 */
+export interface ExportBaseModel {
+  value: string;
+  label: string;
+}
+
+export interface ExportPreset {
+  value: string;
+  label: string;
+  rank: number;
+  steps_per_image: number;
+}
+
+export interface ExportOptionsResponse {
+  base_models: ExportBaseModel[];
+  presets: ExportPreset[];
+}
+
+/** 导出请求体。 */
+export interface ExportPayload {
+  base_model?: string;
+  preset?: string;
+  trigger_word?: string;
+  rank?: number;
+  steps?: number;
+  steps_per_image?: number;
+  resolution?: number[];
+  sample_prompts?: string[];
+  item_ids?: string[];
+  only_captioned?: boolean;
+}
+
+
 export interface DatasetStats {
   image_total: number;
   image_candidate: number;

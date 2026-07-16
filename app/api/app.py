@@ -19,6 +19,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,6 +35,7 @@ from app.api.plugins import (
 )
 from app.api.serialization import enum_metadata, to_jsonable
 from app.domain.enums import DatasetType, Orientation, ReviewStatus, Usability
+from app.services import export as export_service
 from app.services import settings
 from app.services.api import (
     DatasetService,
@@ -964,6 +966,108 @@ def annotate_dataset_items(
             results.append({"item_id": item_id, "ok": False, "error": str(exc)})
 
     return {"results": results}
+
+
+@app.get("/api/datasets/export/options")
+def get_export_options() -> dict[str, Any]:
+    """返回导出（Qwen-Image / ai-toolkit）可选的底模与训练预设。"""
+    presets = [
+        {
+            "value": key,
+            "label": cfg["label"],
+            "rank": cfg["rank"],
+            "steps_per_image": cfg["steps_per_image"],
+        }
+        for key, cfg in export_service.TRAINING_PRESETS.items()
+    ]
+    return {"base_models": export_service.BASE_MODELS, "presets": presets}
+
+
+@app.post("/api/datasets/{dataset_id}/export")
+def export_dataset(
+    dataset_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Response:
+    """把图片数据集导出为 Qwen-Image / ai-toolkit 的 LoRA 训练包（zip）。
+
+    请求体（均可选，缺省走预设）::
+
+        {
+          "base_model": "Qwen/Qwen-Image-2512",
+          "preset": "character" | "action" | "style" | "general",
+          "trigger_word": "...",
+          "rank": 32,
+          "steps": 2000,            # 指定则优先，否则按张数×每图步数
+          "steps_per_image": 100,
+          "resolution": [512, 768, 1024],
+          "sample_prompts": ["..."],
+          "item_ids": ["img-..."],  # 指定则仅导出这些条目，否则全部
+          "only_captioned": true     # 仅导出已有 Caption 的图片
+        }
+    """
+    try:
+        ds = service.get_dataset(dataset_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if ds.type != DatasetType.IMAGE:
+        raise HTTPException(status_code=400, detail="导出目前仅支持图片数据集")
+
+    images = list(service.list_dataset_images(dataset_id))
+    item_ids = payload.get("item_ids")
+    if isinstance(item_ids, list) and item_ids:
+        wanted = {str(i) for i in item_ids}
+        images = [im for im in images if im.id in wanted]
+    if not images:
+        raise HTTPException(status_code=400, detail="没有可导出的图片")
+
+    resolution = payload.get("resolution")
+    if resolution is not None:
+        if not isinstance(resolution, list) or not all(
+            isinstance(r, (int, float)) for r in resolution
+        ):
+            raise HTTPException(status_code=400, detail="resolution 必须为数字数组")
+        resolution = [int(r) for r in resolution]
+    sample_prompts = payload.get("sample_prompts")
+    if sample_prompts is not None and not isinstance(sample_prompts, list):
+        raise HTTPException(status_code=400, detail="sample_prompts 必须为数组")
+
+    opts = export_service.ExportOptions(
+        base_model=str(payload.get("base_model") or "Qwen/Qwen-Image-2512").strip(),
+        preset=str(payload.get("preset") or "character"),
+        trigger_word=str(payload.get("trigger_word") or "").strip(),
+        rank=int(payload["rank"]) if payload.get("rank") else None,
+        steps=int(payload["steps"]) if payload.get("steps") else None,
+        steps_per_image=(
+            int(payload["steps_per_image"])
+            if payload.get("steps_per_image")
+            else None
+        ),
+        resolution=resolution,
+        sample_prompts=(
+            [str(p) for p in sample_prompts] if sample_prompts else None
+        ),
+        only_captioned=bool(payload.get("only_captioned", True)),
+    )
+
+    data, filename, count = export_service.build_export_zip(ds.name, images, opts)
+    if count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="没有满足条件的图片可导出（可能都缺少 Caption 或文件缺失）",
+        )
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "export.zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+            "X-Export-Count": str(count),
+        },
+    )
 
 
 def main() -> None:

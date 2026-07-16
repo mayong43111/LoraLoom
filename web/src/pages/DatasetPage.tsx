@@ -27,6 +27,7 @@ import {
   HomeOutlined,
   ArrowLeftOutlined,
   RobotOutlined,
+  ExportOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate, useParams } from "react-router-dom";
@@ -38,6 +39,8 @@ import type {
   AnnotateResult,
   Dataset,
   DatasetType,
+  ExportBaseModel,
+  ExportPreset,
   ImageModel,
   Video,
 } from "@/api/types";
@@ -357,6 +360,7 @@ export function DatasetDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [annotateOpen, setAnnotateOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const loadDataset = useCallback(async () => {
     setLoading(true);
@@ -452,6 +456,15 @@ export function DatasetDetailPage() {
                   {selectedRowKeys.length > 0
                     ? `（选中 ${selectedRowKeys.length}）`
                     : ""}
+                </Button>
+              )}
+              {dataset.type === "image" && (
+                <Button
+                  icon={<ExportOutlined />}
+                  onClick={() => setExportOpen(true)}
+                  disabled={items.length === 0}
+                >
+                  导出训练包
                 </Button>
               )}
               <Button type="primary" onClick={() => setImportOpen(true)}>
@@ -590,6 +603,16 @@ export function DatasetDetailPage() {
           onDone={async () => {
             await loadItems();
           }}
+        />
+      )}
+
+      {dataset && dataset.type === "image" && (
+        <ExportModal
+          open={exportOpen}
+          datasetId={id}
+          items={items as ImageModel[]}
+          selectedIds={selectedRowKeys}
+          onClose={() => setExportOpen(false)}
         />
       )}
     </div>
@@ -999,6 +1022,217 @@ function AnnotateModal({
           }
         />
       )}
+    </Modal>
+  );
+}
+
+/** 分辨率分桶预设。 */
+const RESOLUTION_OPTIONS = [
+  { label: "512 / 768 / 1024（推荐）", value: "512,768,1024" },
+  { label: "768 / 1024", value: "768,1024" },
+  { label: "仅 1024", value: "1024" },
+];
+
+/** 导出为 Qwen-Image / ai-toolkit 的 LoRA 训练包。 */
+function ExportModal({
+  open,
+  datasetId,
+  items,
+  selectedIds,
+  onClose,
+}: {
+  open: boolean;
+  datasetId: string;
+  items: ImageModel[];
+  selectedIds: string[];
+  onClose: () => void;
+}) {
+  const [baseModels, setBaseModels] = useState<ExportBaseModel[]>([]);
+  const [presets, setPresets] = useState<ExportPreset[]>([]);
+  const [baseModel, setBaseModel] = useState("Qwen/Qwen-Image-2512");
+  const [preset, setPreset] = useState("character");
+  const [scope, setScope] = useState<"selected" | "all">("all");
+  const [onlyCaptioned, setOnlyCaptioned] = useState(true);
+  const [resolution, setResolution] = useState("512,768,1024");
+  const [rank, setRank] = useState<number | undefined>(undefined);
+  const [stepsPerImage, setStepsPerImage] = useState<number | undefined>(
+    undefined,
+  );
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setScope(selectedIds.length > 0 ? "selected" : "all");
+    void api
+      .getExportOptions()
+      .then((res) => {
+        setBaseModels(res.base_models);
+        setPresets(res.presets);
+      })
+      .catch(() => {
+        /* 选项拉取失败时用默认值 */
+      });
+  }, [open, selectedIds.length]);
+
+  const currentPreset = presets.find((p) => p.value === preset);
+  const scopeItems =
+    scope === "selected"
+      ? items.filter((it) => selectedIds.includes(it.id))
+      : items;
+  const captionedCount = scopeItems.filter(
+    (it) => (it.caption || "").trim().length > 0,
+  ).length;
+  const exportCount = onlyCaptioned ? captionedCount : scopeItems.length;
+
+  const handleExport = async () => {
+    if (exportCount === 0) {
+      message.warning("没有可导出的图片（可能都缺少 Caption）");
+      return;
+    }
+    setRunning(true);
+    try {
+      const { blob, filename } = await api.exportDataset(datasetId, {
+        base_model: baseModel,
+        preset,
+        rank,
+        steps_per_image: stepsPerImage,
+        resolution: resolution.split(",").map((r) => Number(r)),
+        item_ids: scope === "selected" ? selectedIds : undefined,
+        only_captioned: onlyCaptioned,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success(`已导出 ${filename}`);
+      onClose();
+    } catch (err) {
+      message.error((err as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="导出训练包（Qwen-Image / ai-toolkit）"
+      width={640}
+      onCancel={onClose}
+      onOk={handleExport}
+      okText={`导出（${exportCount} 张）`}
+      okButtonProps={{ loading: running, disabled: exportCount === 0 }}
+      cancelText="取消"
+    >
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <div>
+          <Typography.Text strong>底模</Typography.Text>
+          <Select
+            style={{ width: "100%", marginTop: 6 }}
+            value={baseModel}
+            onChange={setBaseModel}
+            options={baseModels.map((m) => ({ label: m.label, value: m.value }))}
+            showSearch
+            popupMatchSelectWidth={false}
+          />
+          <Input
+            style={{ marginTop: 6 }}
+            placeholder="或填写自定义模型名，如 Qwen/Qwen-Image"
+            value={baseModel}
+            onChange={(e) => setBaseModel(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <Typography.Text strong>训练预设</Typography.Text>
+          <Radio.Group
+            style={{ display: "block", marginTop: 6 }}
+            value={preset}
+            onChange={(e) => setPreset(e.target.value)}
+          >
+            <Space direction="vertical">
+              {presets.map((p) => (
+                <Radio key={p.value} value={p.value}>
+                  {p.label}
+                  <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                    rank {p.rank}，每图约 {p.steps_per_image} 步
+                  </Typography.Text>
+                </Radio>
+              ))}
+            </Space>
+          </Radio.Group>
+        </div>
+
+        <Space size="large" wrap>
+          <div>
+            <Typography.Text strong>分辨率分桶</Typography.Text>
+            <Select
+              style={{ width: 220, marginTop: 6, display: "block" }}
+              value={resolution}
+              onChange={setResolution}
+              options={RESOLUTION_OPTIONS}
+            />
+          </div>
+          <div>
+            <Typography.Text strong>rank 覆盖</Typography.Text>
+            <Input
+              style={{ width: 140, marginTop: 6, display: "block" }}
+              type="number"
+              placeholder={currentPreset ? String(currentPreset.rank) : "预设"}
+              value={rank ?? ""}
+              onChange={(e) =>
+                setRank(e.target.value ? Number(e.target.value) : undefined)
+              }
+            />
+          </div>
+          <div>
+            <Typography.Text strong>每图步数覆盖</Typography.Text>
+            <Input
+              style={{ width: 140, marginTop: 6, display: "block" }}
+              type="number"
+              placeholder={
+                currentPreset ? String(currentPreset.steps_per_image) : "预设"
+              }
+              value={stepsPerImage ?? ""}
+              onChange={(e) =>
+                setStepsPerImage(
+                  e.target.value ? Number(e.target.value) : undefined,
+                )
+              }
+            />
+          </div>
+        </Space>
+
+        <div>
+          <Typography.Text strong>导出范围</Typography.Text>
+          <Radio.Group
+            style={{ display: "block", marginTop: 6 }}
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+          >
+            <Radio value="selected" disabled={selectedIds.length === 0}>
+              仅选中（{selectedIds.length}）
+            </Radio>
+            <Radio value="all">全部（{items.length}）</Radio>
+          </Radio.Group>
+        </div>
+
+        <Space>
+          <Switch checked={onlyCaptioned} onChange={setOnlyCaptioned} />
+          <Typography.Text>仅导出已有 Caption 的图片</Typography.Text>
+        </Space>
+
+        <Alert
+          type="info"
+          showIcon
+          message={`将导出 ${exportCount} 张图片（含同名 .txt Caption）+ ai-toolkit 训练配置。`}
+          description="产物为 zip：dataset/ 目录（图片 + .txt） + {name}.yaml + README.txt。放入 ai-toolkit 后运行 python run.py {name}.yaml。"
+        />
+      </Space>
     </Modal>
   );
 }
