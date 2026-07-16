@@ -17,6 +17,9 @@ import type {
   ImageModel,
   ImageUpdatePayload,
   ImportBatch,
+  LlmConfig,
+  LlmConfigInput,
+  LlmTestResult,
   PersonCluster,
   Selection,
   Video,
@@ -176,4 +179,12 @@ export const api = {
   listSelections: () => request<Selection[]>("/selections"),
   getSelection: (selectionId: string) =>
     request<Selection>(`/selections/${selectionId}`),
+  getLlmConfig: () => request<LlmConfig>("/settings/llm"),
+  saveLlmConfig: (payload: LlmConfigInput) =>
+    request<LlmConfig>("/settings/llm", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  testLlmConnection: () =>
+    request<LlmTestResult>("/settings/llm/test", { method: "POST" }),
 };

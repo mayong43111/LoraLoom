@@ -34,6 +34,7 @@ from app.api.plugins import (
 )
 from app.api.serialization import enum_metadata, to_jsonable
 from app.domain.enums import Orientation, ReviewStatus, Usability
+from app.services import settings
 from app.services.api import (
     DatasetService,
     ImageCreate,
@@ -89,6 +90,29 @@ def get_data_source(service: DatasetService = Depends(get_service)) -> dict[str,
     """返回当前数据源信息（SQLite 数据库文件的绝对路径），供前端展示。"""
     path = getattr(service, "db_path", None)
     return {"kind": "sqlite", "path": path}
+
+
+# -- 设置：LLM 配置 ---------------------------------------------------------
+@app.get("/api/settings/llm")
+def get_llm_settings() -> dict[str, Any]:
+    """返回 LLM 配置（不含明文密钥，仅标记是否已设置）。"""
+    return settings.get_llm_config()
+
+
+@app.put("/api/settings/llm")
+def update_llm_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存 LLM 配置；api_key 为空时保留原密钥。"""
+    try:
+        return settings.save_llm_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/settings/llm/test")
+def test_llm_settings() -> dict[str, Any]:
+    """用当前保存的配置发起一次最小请求以验证连通性。"""
+    return settings.test_llm_connection()
+
 
 
 # -- Dashboard --------------------------------------------------------------

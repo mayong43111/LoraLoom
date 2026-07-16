@@ -11,6 +11,32 @@ export interface DataSourceInfo {
   path: string | null;
 }
 
+/** LLM 配置（后端返回，绝不含明文密钥）。 */
+export interface LlmConfig {
+  provider: string;
+  endpoint: string;
+  deployment: string;
+  api_version: string;
+  model: string;
+  api_key_set: boolean;
+  supported_providers: string[];
+}
+
+/** 保存 LLM 配置的入参；api_key 留空表示保留原密钥。 */
+export interface LlmConfigInput {
+  provider: string;
+  endpoint: string;
+  deployment: string;
+  api_version: string;
+  model: string;
+  api_key?: string;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface DatasetStats {
   image_total: number;
   image_candidate: number;
