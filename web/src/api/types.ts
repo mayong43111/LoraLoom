@@ -37,6 +37,54 @@ export interface LlmTestResult {
   message: string;
 }
 
+/** 数据集类型。 */
+export type DatasetType = "image" | "video";
+
+/** 数据集。先创建并设定类型，再从图片/视频库导入内容。 */
+export interface Dataset {
+  id: string;
+  name: string;
+  type: DatasetType;
+  description: string;
+  item_count: number;
+  created_at: string;
+}
+
+/** 数据集条目列表响应。type 决定 items 是图片还是视频。 */
+export interface DatasetItems {
+  type: DatasetType;
+  items: (ImageModel | Video)[];
+}
+
+/** 标注统一设定（触发词等，服务端持久化）。 */
+export interface AnnotationConfig {
+  trigger_word: string;
+}
+
+/** AI 标注请求体。 */
+export interface AnnotatePayload {
+  item_ids: string[];
+  system_prompt: string;
+  user_text?: string;
+  trigger_word?: string;
+  prepend_trigger?: boolean;
+  overwrite?: boolean;
+}
+
+/** 单条标注结果。 */
+export interface AnnotateResult {
+  item_id: string;
+  ok: boolean;
+  caption?: string;
+  error?: string;
+  skipped?: boolean;
+}
+
+/** AI 标注响应体。 */
+export interface AnnotateResponse {
+  results: AnnotateResult[];
+}
+
 export interface DatasetStats {
   image_total: number;
   image_candidate: number;

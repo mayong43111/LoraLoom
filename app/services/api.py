@@ -11,8 +11,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.enums import Orientation, ReviewStatus, Usability
+from app.domain.enums import DatasetType, Orientation, ReviewStatus, Usability
 from app.domain.models import (
+    Dataset,
     DatasetStats,
     DownloadTask,
     FrameJob,
@@ -295,3 +296,64 @@ class DatasetService(ABC):
     @abstractmethod
     def get_selection(self, selection_id: str) -> Selection:
         """返回单个 Selection 详情。"""
+
+    # -- 数据集 -------------------------------------------------------------
+    # 以下方法为非抽象默认实现（抛未实现异常），便于旧的 mock 实现无需改动即可
+    # 保持有效；SQLite 实现提供完整功能。
+    def list_datasets(self) -> Sequence[Dataset]:
+        """返回数据集列表。"""
+        raise NotImplementedError
+
+    def get_dataset(self, dataset_id: str) -> Dataset:
+        """返回单个数据集详情。"""
+        raise NotImplementedError
+
+    def create_dataset(
+        self, name: str, type: DatasetType, description: str = ""
+    ) -> Dataset:
+        """创建数据集并设定类型（图片/视频）。"""
+        raise NotImplementedError
+
+    def update_dataset(
+        self,
+        dataset_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Dataset:
+        """更新数据集名称/描述（类型创建后不可变更）。"""
+        raise NotImplementedError
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        """删除数据集及其条目关联（不影响素材库中的原始图片/视频）。"""
+        raise NotImplementedError
+
+    def list_dataset_images(self, dataset_id: str) -> Sequence[Image]:
+        """返回图片类型数据集中的图片。"""
+        raise NotImplementedError
+
+    def list_dataset_videos(self, dataset_id: str) -> Sequence[Video]:
+        """返回视频类型数据集中的视频。"""
+        raise NotImplementedError
+
+    def add_dataset_items(self, dataset_id: str, item_ids: Sequence[str]) -> Dataset:
+        """把素材库中的图片/视频加入数据集（按数据集类型校验）。"""
+        raise NotImplementedError
+
+    def remove_dataset_items(
+        self, dataset_id: str, item_ids: Sequence[str]
+    ) -> Dataset:
+        """从数据集移除条目（不删除素材库原始内容）。"""
+        raise NotImplementedError
+
+    def update_dataset_item(
+        self,
+        dataset_id: str,
+        item_id: str,
+        *,
+        caption: str | None = None,
+        tags: Sequence[str] | None = None,
+    ) -> Image | Video:
+        """修改数据集内某条目的标签/说明覆盖，仅对当前数据集生效。"""
+        raise NotImplementedError
+

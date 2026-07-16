@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS selections (
     id  TEXT PRIMARY KEY,
     doc TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS datasets (
+    id         TEXT PRIMARY KEY,
+    type       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dataset_items (
+    dataset_id TEXT NOT NULL,
+    item_id    TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    added_at   TEXT NOT NULL,
+    caption    TEXT,
+    tags       TEXT,
+    PRIMARY KEY (dataset_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);
 """
 
 
@@ -97,7 +116,20 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     """创建表结构（幂等）。"""
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """为既有数据库补齐后加的列（幂等）。"""
+    cols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(dataset_items)").fetchall()
+    }
+    if "caption" not in cols:
+        conn.execute("ALTER TABLE dataset_items ADD COLUMN caption TEXT")
+    if "tags" not in cols:
+        conn.execute("ALTER TABLE dataset_items ADD COLUMN tags TEXT")
 
 
 def is_empty(conn: sqlite3.Connection) -> bool:

@@ -166,6 +166,17 @@ def video_group_from_dict(d: dict[str, Any]) -> models.VideoGroup:
     )
 
 
+def dataset_from_dict(d: dict[str, Any]) -> models.Dataset:
+    return models.Dataset(
+        id=d["id"],
+        name=d["name"],
+        type=enums.DatasetType(d["type"]),
+        description=d.get("description", ""),
+        item_count=d.get("item_count", 0),
+        created_at=_dt(d.get("created_at")),
+    )
+
+
 def frame_result_from_dict(d: dict[str, Any]) -> models.FrameResult:
     return models.FrameResult(
         target_timestamp=d["target_timestamp"],

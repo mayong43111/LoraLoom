@@ -30,6 +30,11 @@ _DEFAULT_LLM: dict[str, Any] = {
     "api_key": "",
 }
 
+# 标注相关的统一设定：触发词等在此持久化，便于跨会话复用。
+_DEFAULT_ANNOTATION: dict[str, Any] = {
+    "trigger_word": "",
+}
+
 
 def _read_all() -> dict[str, Any]:
     if not _SETTINGS_PATH.is_file():
@@ -155,3 +160,118 @@ def test_llm_connection() -> dict[str, Any]:
         return {"ok": False, "message": f"无法连接: {exc.reason}"}
     except Exception as exc:  # noqa: BLE001 - 边界兜底
         return {"ok": False, "message": f"请求失败: {exc}"}
+
+
+# -- 标注设定（触发词等统一设定） -------------------------------------------
+def get_annotation_config() -> dict[str, Any]:
+    """返回标注相关的统一设定（触发词等）。"""
+    with _LOCK:
+        stored = _read_all().get("annotation") or {}
+    return {
+        **_DEFAULT_ANNOTATION,
+        **{k: v for k, v in stored.items() if k in _DEFAULT_ANNOTATION},
+    }
+
+
+def save_annotation_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存标注设定，返回最新配置。"""
+    current = get_annotation_config()
+    updated = {
+        "trigger_word": str(
+            payload.get("trigger_word", current.get("trigger_word", ""))
+        ).strip(),
+    }
+    with _LOCK:
+        data = _read_all()
+        data["annotation"] = updated
+        _write_all(data)
+    return get_annotation_config()
+
+
+class LLMError(RuntimeError):
+    """LLM 调用相关的错误（配置缺失、网络失败、响应异常等）。"""
+
+
+def caption_image(
+    system_prompt: str,
+    image_bytes: bytes,
+    mime: str,
+    user_text: str = "",
+) -> str:
+    """用已保存的 Azure Foundry 视觉模型为一张图片生成描述文本。
+
+    ``system_prompt`` 为调用方（前端）动态拼装并对用户可见的系统提示词；
+    图片以 base64 data URL 形式随消息一并发送。返回模型输出的纯文本描述。
+    配置缺失或调用失败时抛出 :class:`LLMError`。
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    cfg = _raw_llm_config()
+    endpoint = cfg["endpoint"].rstrip("/")
+    deployment = cfg["deployment"]
+    api_version = cfg["api_version"]
+    api_key = cfg["api_key"]
+
+    missing = [
+        name
+        for name, val in (
+            ("endpoint", endpoint),
+            ("deployment", deployment),
+            ("api_key", api_key),
+        )
+        if not val
+    ]
+    if missing:
+        raise LLMError(f"LLM 配置不完整，缺少: {', '.join(missing)}")
+
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime or 'image/jpeg'};base64,{b64}"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text or "Caption this image."},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+    url = (
+        f"{endpoint}/openai/deployments/{deployment}/chat/completions"
+        f"?api-version={api_version}"
+    )
+    body = json.dumps(
+        {"messages": messages, "max_tokens": 500, "temperature": 0.2}
+    ).encode("utf-8")
+    req = urllib.request.Request(  # noqa: S310 - 目标由用户配置且仅 https 使用
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "api-key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:  # noqa: S310
+            raw = resp.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "ignore")[:300]
+        except Exception:  # noqa: BLE001 - 仅用于附带错误详情
+            detail = ""
+        raise LLMError(f"HTTP {exc.code} {exc.reason}: {detail}".strip()) from exc
+    except urllib.error.URLError as exc:
+        raise LLMError(f"无法连接: {exc.reason}") from exc
+
+    try:
+        data = json.loads(raw)
+        content = data["choices"][0]["message"]["content"]
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise LLMError(f"无法解析模型响应: {raw[:200]}") from exc
+
+    if isinstance(content, list):  # 兼容分段返回
+        content = "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return str(content).strip()

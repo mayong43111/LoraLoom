@@ -8,7 +8,7 @@ import { QualityPage } from "@/pages/QualityPage";
 import { PeoplePage } from "@/pages/PeoplePage";
 import { ReviewPage } from "@/pages/ReviewPage";
 import { SelectionPage } from "@/pages/SelectionPage";
-import { ExportPage } from "@/pages/ExportPage";
+import { DatasetListPage, DatasetDetailPage } from "@/pages/DatasetPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ToolPage } from "@/tools/ToolPage";
 
@@ -25,7 +25,8 @@ export default function App() {
         <Route path="/people" element={<PeoplePage />} />
         <Route path="/review" element={<ReviewPage />} />
         <Route path="/selection" element={<SelectionPage />} />
-        <Route path="/export" element={<ExportPage />} />
+        <Route path="/datasets" element={<DatasetListPage />} />
+        <Route path="/datasets/:id" element={<DatasetDetailPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/tools/:id" element={<ToolPage />} />
       </Routes>

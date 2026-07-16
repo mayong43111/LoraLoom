@@ -13,10 +13,13 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from app.domain.enums import (
+    DatasetType,
     FrameStatus,
     ImageStatus,
     Orientation,
@@ -27,6 +30,7 @@ from app.domain.enums import (
     VideoStatus,
 )
 from app.domain.models import (
+    Dataset,
     DatasetStats,
     DownloadTask,
     FrameJob,
@@ -49,6 +53,8 @@ from app.services.api import (
     VideoFilter,
 )
 from app.services.mock_data import MockDataset, build_frame_job
+
+T = TypeVar("T")
 
 
 class SqliteDatasetService(DatasetService):
@@ -823,3 +829,220 @@ class SqliteDatasetService(DatasetService):
         if row is None:
             raise ServiceError(f"组包不存在: {selection_id}")
         return mapping.selection_from_dict(self._doc(row))
+
+    # -- 数据集 -------------------------------------------------------------
+    def _dataset_item_count(self, dataset_id: str) -> int:
+        row = self._fetchone(
+            "SELECT COUNT(*) AS n FROM dataset_items WHERE dataset_id = ?",
+            (dataset_id,),
+        )
+        return int(row["n"]) if row is not None else 0
+
+    def _dataset_from_row(self, row: sqlite3.Row) -> Dataset:
+        ds = mapping.dataset_from_dict(self._doc(row))
+        ds.item_count = self._dataset_item_count(ds.id)
+        return ds
+
+    def list_datasets(self) -> Sequence[Dataset]:
+        rows = self._fetchall("SELECT doc FROM datasets ORDER BY created_at, id")
+        return [self._dataset_from_row(r) for r in rows]
+
+    def get_dataset(self, dataset_id: str) -> Dataset:
+        row = self._fetchone("SELECT doc FROM datasets WHERE id = ?", (dataset_id,))
+        if row is None:
+            raise ServiceError(f"数据集不存在: {dataset_id}")
+        return self._dataset_from_row(row)
+
+    def create_dataset(
+        self, name: str, type: DatasetType, description: str = ""
+    ) -> Dataset:
+        name = (name or "").strip()
+        if not name:
+            raise ServiceError("数据集名称不能为空")
+        dataset = Dataset(
+            id=f"ds-{uuid4().hex[:12]}",
+            name=name,
+            type=type,
+            description=description,
+        )
+        self._write(
+            "INSERT INTO datasets (id, type, name, created_at, doc) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                dataset.id,
+                dataset.type.value,
+                dataset.name,
+                dataset.created_at.isoformat(),
+                mapping.to_json(dataset),
+            ),
+        )
+        return dataset
+
+    def update_dataset(
+        self,
+        dataset_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> Dataset:
+        row = self._fetchone("SELECT doc FROM datasets WHERE id = ?", (dataset_id,))
+        if row is None:
+            raise ServiceError(f"数据集不存在: {dataset_id}")
+        dataset = mapping.dataset_from_dict(self._doc(row))
+        if name is not None:
+            name = name.strip()
+            if not name:
+                raise ServiceError("数据集名称不能为空")
+            dataset.name = name
+        if description is not None:
+            dataset.description = description
+        self._write(
+            "UPDATE datasets SET name = ?, doc = ? WHERE id = ?",
+            (dataset.name, mapping.to_json(dataset), dataset_id),
+        )
+        dataset.item_count = self._dataset_item_count(dataset_id)
+        return dataset
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        row = self._fetchone("SELECT 1 FROM datasets WHERE id = ?", (dataset_id,))
+        if row is None:
+            raise ServiceError(f"数据集不存在: {dataset_id}")
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM dataset_items WHERE dataset_id = ?", (dataset_id,)
+            )
+            self._conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+            self._conn.commit()
+
+    def list_dataset_images(self, dataset_id: str) -> Sequence[Image]:
+        self.get_dataset(dataset_id)  # 校验存在
+        rows = self._fetchall(
+            "SELECT i.doc AS doc, di.caption AS o_caption, di.tags AS o_tags "
+            "FROM dataset_items di "
+            "JOIN images i ON i.id = di.item_id "
+            "WHERE di.dataset_id = ? AND di.kind = 'image' "
+            "ORDER BY di.added_at, di.item_id",
+            (dataset_id,),
+        )
+        return [
+            self._apply_item_override(mapping.image_from_dict(self._doc(r)), r)
+            for r in rows
+        ]
+
+    def list_dataset_videos(self, dataset_id: str) -> Sequence[Video]:
+        self.get_dataset(dataset_id)  # 校验存在
+        rows = self._fetchall(
+            "SELECT v.doc AS doc, di.caption AS o_caption, di.tags AS o_tags "
+            "FROM dataset_items di "
+            "JOIN videos v ON v.id = di.item_id "
+            "WHERE di.dataset_id = ? AND di.kind = 'video' "
+            "ORDER BY di.added_at, di.item_id",
+            (dataset_id,),
+        )
+        return [
+            self._apply_item_override(mapping.video_from_dict(self._doc(r)), r)
+            for r in rows
+        ]
+
+    def _apply_item_override(self, obj: T, row: sqlite3.Row) -> T:
+        """将数据集级的标签/说明覆盖应用到素材副本上（不影响原始素材）。"""
+        changes: dict[str, Any] = {}
+        caption = row["o_caption"]
+        if caption is not None:
+            changes["caption"] = caption
+        tags_json = row["o_tags"]
+        if tags_json is not None:
+            changes["tags"] = json.loads(tags_json)
+        return replace(obj, **changes) if changes else obj
+
+    def update_dataset_item(
+        self,
+        dataset_id: str,
+        item_id: str,
+        *,
+        caption: str | None = None,
+        tags: Sequence[str] | None = None,
+    ) -> Image | Video:
+        dataset = self.get_dataset(dataset_id)
+        exists = self._fetchone(
+            "SELECT 1 FROM dataset_items WHERE dataset_id = ? AND item_id = ?",
+            (dataset_id, item_id),
+        )
+        if exists is None:
+            raise ServiceError(f"素材不在数据集中: {item_id}")
+        sets: list[str] = []
+        params: list[Any] = []
+        if caption is not None:
+            sets.append("caption = ?")
+            params.append(caption)
+        if tags is not None:
+            sets.append("tags = ?")
+            params.append(json.dumps(list(tags), ensure_ascii=False))
+        if sets:
+            params.extend([dataset_id, item_id])
+            self._write(
+                f"UPDATE dataset_items SET {', '.join(sets)} "
+                "WHERE dataset_id = ? AND item_id = ?",
+                tuple(params),
+            )
+        is_image = dataset.type.value == "image"
+        table = "images" if is_image else "videos"
+        row = self._fetchone(
+            f"SELECT x.doc AS doc, di.caption AS o_caption, di.tags AS o_tags "
+            f"FROM dataset_items di JOIN {table} x ON x.id = di.item_id "
+            "WHERE di.dataset_id = ? AND di.item_id = ?",
+            (dataset_id, item_id),
+        )
+        if row is None:
+            raise ServiceError(f"素材不存在: {item_id}")
+        obj = (
+            mapping.image_from_dict(self._doc(row))
+            if is_image
+            else mapping.video_from_dict(self._doc(row))
+        )
+        return self._apply_item_override(obj, row)
+
+    def add_dataset_items(
+        self, dataset_id: str, item_ids: Sequence[str]
+    ) -> Dataset:
+        dataset = self.get_dataset(dataset_id)
+        kind = dataset.type.value  # "image" | "video"
+        table = "images" if kind == "image" else "videos"
+        now = datetime.now().isoformat()
+        rows: list[tuple[str, str, str, str]] = []
+        for item_id in item_ids:
+            if not item_id:
+                continue
+            exists = self._fetchone(
+                f"SELECT 1 FROM {table} WHERE id = ?", (item_id,)
+            )
+            if exists is None:
+                label = "图片" if kind == "image" else "视频"
+                raise ServiceError(f"{label}不存在: {item_id}")
+            rows.append((dataset_id, item_id, kind, now))
+        if rows:
+            with self._lock:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO dataset_items "
+                    "(dataset_id, item_id, kind, added_at) VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+                self._conn.commit()
+        dataset.item_count = self._dataset_item_count(dataset_id)
+        return dataset
+
+    def remove_dataset_items(
+        self, dataset_id: str, item_ids: Sequence[str]
+    ) -> Dataset:
+        dataset = self.get_dataset(dataset_id)
+        ids = [i for i in item_ids if i]
+        if ids:
+            with self._lock:
+                self._conn.executemany(
+                    "DELETE FROM dataset_items WHERE dataset_id = ? AND item_id = ?",
+                    [(dataset_id, i) for i in ids],
+                )
+                self._conn.commit()
+        dataset.item_count = self._dataset_item_count(dataset_id)
+        return dataset
+

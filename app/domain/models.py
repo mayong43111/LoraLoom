@@ -12,6 +12,7 @@ from datetime import datetime
 from app.domain.enums import (
     BatchStatus,
     CaptionOrigin,
+    DatasetType,
     DownloadStatus,
     DownloadTool,
     FaceCompleteness,
@@ -315,3 +316,15 @@ class DatasetStats:
     pending_quality: int
     pending_face: int
     pending_review: int
+
+
+@dataclass(slots=True)
+class Dataset:
+    """数据集。先创建并设定类型（图片/视频），再从对应素材库导入内容。"""
+
+    id: str
+    name: str
+    type: DatasetType
+    description: str = ""
+    item_count: int = 0
+    created_at: datetime = field(default_factory=datetime.now)

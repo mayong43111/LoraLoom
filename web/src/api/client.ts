@@ -8,9 +8,15 @@
 import type {
   DatasetStats,
   DataSourceInfo,
+  Dataset,
+  DatasetItems,
+  DatasetType,
   DownloadTask,
   EnumMetadata,
   FrameJob,
+  AnnotateResponse,
+  AnnotatePayload,
+  AnnotationConfig,
   ImageCreatePayload,
   ImageFilterParams,
   ImageGroup,
@@ -187,4 +193,63 @@ export const api = {
     }),
   testLlmConnection: () =>
     request<LlmTestResult>("/settings/llm/test", { method: "POST" }),
+  listDatasets: () => request<Dataset[]>("/datasets"),
+  createDataset: (payload: {
+    name: string;
+    type: DatasetType;
+    description?: string;
+  }) =>
+    request<Dataset>("/datasets", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getDataset: (datasetId: string) =>
+    request<Dataset>(`/datasets/${datasetId}`),
+  updateDataset: (
+    datasetId: string,
+    payload: { name?: string; description?: string },
+  ) =>
+    request<Dataset>(`/datasets/${datasetId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteDataset: (datasetId: string) =>
+    request<{ deleted: string }>(`/datasets/${datasetId}`, {
+      method: "DELETE",
+    }),
+  listDatasetItems: (datasetId: string) =>
+    request<DatasetItems>(`/datasets/${datasetId}/items`),
+  addDatasetItems: (datasetId: string, itemIds: string[]) =>
+    request<Dataset>(`/datasets/${datasetId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    }),
+  removeDatasetItems: (datasetId: string, itemIds: string[]) =>
+    request<Dataset>(`/datasets/${datasetId}/items/remove`, {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    }),
+  updateDatasetItem: (
+    datasetId: string,
+    itemId: string,
+    payload: { caption?: string; tags?: string[] },
+  ) =>
+    request<ImageModel | Video>(
+      `/datasets/${datasetId}/items/${itemId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
+  annotateDatasetItems: (datasetId: string, payload: AnnotatePayload) =>
+    request<AnnotateResponse>(`/datasets/${datasetId}/annotate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getAnnotationConfig: () => request<AnnotationConfig>("/settings/annotation"),
+  saveAnnotationConfig: (payload: { trigger_word: string }) =>
+    request<AnnotationConfig>("/settings/annotation", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 };

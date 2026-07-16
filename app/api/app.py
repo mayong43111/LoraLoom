@@ -33,7 +33,7 @@ from app.api.plugins import (
     invoke_plugin,
 )
 from app.api.serialization import enum_metadata, to_jsonable
-from app.domain.enums import Orientation, ReviewStatus, Usability
+from app.domain.enums import DatasetType, Orientation, ReviewStatus, Usability
 from app.services import settings
 from app.services.api import (
     DatasetService,
@@ -113,6 +113,18 @@ def test_llm_settings() -> dict[str, Any]:
     """用当前保存的配置发起一次最小请求以验证连通性。"""
     return settings.test_llm_connection()
 
+
+# -- 设置：标注（统一设定，如触发词） --------------------------------------
+@app.get("/api/settings/annotation")
+def get_annotation_settings() -> dict[str, Any]:
+    """返回标注统一设定（触发词等）。"""
+    return settings.get_annotation_config()
+
+
+@app.put("/api/settings/annotation")
+def update_annotation_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存标注统一设定。"""
+    return settings.save_annotation_config(payload)
 
 
 # -- Dashboard --------------------------------------------------------------
@@ -739,6 +751,219 @@ def get_selection(
         return to_jsonable(service.get_selection(selection_id))
     except ServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# -- 数据集 -----------------------------------------------------------------
+@app.get("/api/datasets")
+def list_datasets(service: DatasetService = Depends(get_service)) -> Any:
+    return to_jsonable(service.list_datasets())
+
+
+@app.post("/api/datasets", status_code=201)
+def create_dataset(
+    payload: dict[str, Any], service: DatasetService = Depends(get_service)
+) -> Any:
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="数据集名称不能为空")
+    try:
+        ds_type = DatasetType(payload.get("type"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"非法的数据集类型: {payload.get('type')}"
+        ) from exc
+    ds = service.create_dataset(name, ds_type, payload.get("description", ""))
+    return to_jsonable(ds)
+
+
+@app.get("/api/datasets/{dataset_id}")
+def get_dataset(
+    dataset_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        return to_jsonable(service.get_dataset(dataset_id))
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/api/datasets/{dataset_id}")
+def update_dataset(
+    dataset_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="数据集名称不能为空")
+        kwargs["name"] = name
+    if "description" in payload:
+        kwargs["description"] = payload.get("description") or ""
+    try:
+        return to_jsonable(service.update_dataset(dataset_id, **kwargs))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/datasets/{dataset_id}")
+def delete_dataset(
+    dataset_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        service.delete_dataset(dataset_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": dataset_id}
+
+
+@app.get("/api/datasets/{dataset_id}/items")
+def list_dataset_items(
+    dataset_id: str, service: DatasetService = Depends(get_service)
+) -> Any:
+    try:
+        ds = service.get_dataset(dataset_id)
+        if ds.type == DatasetType.IMAGE:
+            items = service.list_dataset_images(dataset_id)
+        else:
+            items = service.list_dataset_videos(dataset_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"type": ds.type.value, "items": to_jsonable(items)}
+
+
+@app.post("/api/datasets/{dataset_id}/items")
+def add_dataset_items(
+    dataset_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    item_ids = payload.get("item_ids") or []
+    if not isinstance(item_ids, list):
+        raise HTTPException(status_code=400, detail="item_ids 必须为数组")
+    try:
+        return to_jsonable(service.add_dataset_items(dataset_id, item_ids))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/datasets/{dataset_id}/items/remove")
+def remove_dataset_items(
+    dataset_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    item_ids = payload.get("item_ids") or []
+    if not isinstance(item_ids, list):
+        raise HTTPException(status_code=400, detail="item_ids 必须为数组")
+    try:
+        return to_jsonable(service.remove_dataset_items(dataset_id, item_ids))
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/datasets/{dataset_id}/items/{item_id}")
+def update_dataset_item(
+    dataset_id: str,
+    item_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    kwargs: dict[str, Any] = {}
+    if "caption" in payload:
+        kwargs["caption"] = payload.get("caption") or ""
+    if "tags" in payload:
+        tags = payload.get("tags") or []
+        if not isinstance(tags, list):
+            raise HTTPException(status_code=400, detail="tags 必须为数组")
+        kwargs["tags"] = [str(t) for t in tags]
+    try:
+        item = service.update_dataset_item(dataset_id, item_id, **kwargs)
+    except ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return to_jsonable(item)
+
+
+@app.post("/api/datasets/{dataset_id}/annotate")
+def annotate_dataset_items(
+    dataset_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> dict[str, Any]:
+    """使用已配置的 LLM 视觉模型批量/单独为数据集图片生成 Caption。
+
+    请求体::
+
+        {
+          "item_ids": ["img-..."],       # 需要标注的条目
+          "system_prompt": "...",         # 前端拼装、对用户可见的系统提示词
+          "user_text": "...",             # 可选，用户侧提示
+          "trigger_word": "...",          # 可选，触发词
+          "prepend_trigger": true,         # 是否把触发词加入生成答案
+          "overwrite": true                # 是否覆盖已有 Caption（false 时仅填补空的）
+        }
+
+    仅覆盖当前数据集内的 Caption（copy-on-write），不影响素材库原图。
+    逐条返回结果，单条失败不影响其它条目。
+    """
+    item_ids = payload.get("item_ids") or []
+    if not isinstance(item_ids, list) or not item_ids:
+        raise HTTPException(status_code=400, detail="item_ids 必须为非空数组")
+    system_prompt = str(payload.get("system_prompt") or "").strip()
+    if not system_prompt:
+        raise HTTPException(status_code=400, detail="system_prompt 不能为空")
+    user_text = str(payload.get("user_text") or "").strip()
+    trigger_word = str(payload.get("trigger_word") or "").strip()
+    prepend_trigger = bool(payload.get("prepend_trigger"))
+    overwrite = bool(payload.get("overwrite", True))
+
+    try:
+        ds = service.get_dataset(dataset_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if ds.type != DatasetType.IMAGE:
+        raise HTTPException(status_code=400, detail="AI 标注目前仅支持图片数据集")
+
+    existing = {it.id: it for it in service.list_dataset_images(dataset_id)}
+
+    results: list[dict[str, Any]] = []
+    for item_id in item_ids:
+        current = existing.get(item_id)
+        if current is None:
+            results.append(
+                {"item_id": item_id, "ok": False, "error": "条目不在数据集中"}
+            )
+            continue
+        if not overwrite and (current.caption or "").strip():
+            results.append(
+                {
+                    "item_id": item_id,
+                    "ok": True,
+                    "skipped": True,
+                    "caption": current.caption,
+                }
+            )
+            continue
+        try:
+            image = service.get_image(item_id)
+            path = getattr(image, "image_path", "") or ""
+            if not path or not os.path.isfile(path):
+                raise settings.LLMError("图片文件不存在")
+            mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+            with open(path, "rb") as fh:
+                data = fh.read()
+            answer = settings.caption_image(system_prompt, data, mime, user_text)
+            caption = answer
+            if prepend_trigger and trigger_word:
+                caption = f"{trigger_word}, {answer}" if answer else trigger_word
+            service.update_dataset_item(dataset_id, item_id, caption=caption)
+            results.append({"item_id": item_id, "ok": True, "caption": caption})
+        except (settings.LLMError, ServiceError) as exc:
+            results.append({"item_id": item_id, "ok": False, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - 单条兜底，不中断批量
+            results.append({"item_id": item_id, "ok": False, "error": str(exc)})
+
+    return {"results": results}
 
 
 def main() -> None:

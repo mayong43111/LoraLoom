@@ -343,3 +343,14 @@ class ExportFormat(LabeledEnum):
     @property
     def is_mvp(self) -> bool:
         return self in (ExportFormat.JSONL, ExportFormat.CSV)
+
+
+class DatasetType(LabeledEnum):
+    """数据集类型。决定数据集从图片库还是视频库导入内容。"""
+
+    IMAGE = "image"
+    VIDEO = "video"
+
+    @classmethod
+    def _labels(cls) -> dict[str, str]:
+        return {"image": "图片", "video": "视频"}
