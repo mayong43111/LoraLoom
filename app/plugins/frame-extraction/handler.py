@@ -26,6 +26,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from PIL import Image as PILImage
+
 _PLUGIN_DIR = Path(__file__).resolve().parent
 _WORKSPACE = Path.cwd() / "workspace"
 _TMP_ROOT = _WORKSPACE / "tmp" / "frames"
@@ -534,14 +536,16 @@ def _act_commit(payload: dict[str, Any], service: Any) -> dict[str, Any]:
             if not jpeg:
                 continue
             out_path.write_bytes(jpeg)
+        with PILImage.open(out_path) as saved_image:
+            width, height = saved_image.size
         title = f"{session['video_title']}@{actual_ts:.3f}s"
         service.create_image(
             ImageCreate(
                 title=title,
                 group_id=group_id,
                 tags=list(tags),
-                width=int(session["width"] or 0),
-                height=int(session["height"] or 0),
+                width=width,
+                height=height,
                 path=f"workspace/images/{filename}",
                 quality_score=float(frame["quality_score"]),
                 quality_flags=list(frame["quality_flags"]),

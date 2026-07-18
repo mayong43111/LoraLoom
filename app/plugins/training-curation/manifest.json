@@ -1,0 +1,10 @@
+{
+  "id": "image.training-curation",
+  "name": "训练集策展",
+  "description": "按人物形象或动作训练模板推荐图片，并从高分辨率原图生成头部或近景裁切",
+  "scopes": ["image"],
+  "selection": ["multi", "group"],
+  "ui": "modal",
+  "entry": "index.js",
+  "backend": "handler.py"
+}

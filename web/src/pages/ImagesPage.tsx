@@ -13,19 +13,24 @@
 import { useMemo, useState } from "react";
 import {
   App,
+  Alert,
   Breadcrumb,
   Button,
+  Checkbox,
   Descriptions,
   Drawer,
   Dropdown,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
   Select,
+  Segmented,
   Space,
   Table,
   Tag,
+  Typography,
   Upload,
 } from "antd";
 import {
@@ -38,7 +43,9 @@ import {
   MoreOutlined,
   PictureOutlined,
   ReloadOutlined,
+  ExpandOutlined,
   SwapOutlined,
+  ScissorOutlined,
   TagsOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
@@ -56,6 +63,8 @@ import type { ImageFilterParams, ImageGroup, ImageModel } from "@/api/types";
 import { ToolsModal } from "@/tools";
 import type { ToolDefinition, ToolSelection, ToolTarget } from "@/tools";
 import { MediaBrowser } from "@/components/MediaBrowser";
+import ReactCrop, { type PercentCrop } from "react-image-crop";
+import "react-image-crop/dist/ReactCrop.css";
 
 const UNGROUPED_NAME = "未分组";
 const ROOT_VALUE = "__root__";
@@ -64,19 +73,196 @@ const ROOT_VALUE = "__root__";
 function ImageDetail({
   image,
   groupName,
+  onUpdated,
 }: {
   image: ImageModel;
   groupName: string;
+  onUpdated: (image: ImageModel) => void;
 }) {
+  const { message, modal } = App.useApp();
+  const [cropping, setCropping] = useState(false);
+  const [cropMode, setCropMode] = useState<"head" | "closeup">("head");
+  const [crop, setCrop] = useState<PercentCrop>();
+  const [sourceSize, setSourceSize] = useState({ width: 0, height: 0 });
+  const [loadingCrop, setLoadingCrop] = useState(false);
+  const [targetShortSide, setTargetShortSide] = useState(1024);
+  const [upscaling, setUpscaling] = useState(false);
+
+  const startCrop = async (mode: "head" | "closeup") => {
+    setLoadingCrop(true);
+    try {
+      const suggestion = await api.getImageCropSuggestion(image.id, mode);
+      setCropMode(mode);
+      setSourceSize({
+        width: suggestion.source_width,
+        height: suggestion.source_height,
+      });
+      setCrop({
+        unit: "%",
+        x: (suggestion.crop.x / suggestion.source_width) * 100,
+        y: (suggestion.crop.y / suggestion.source_height) * 100,
+        width: (suggestion.crop.width / suggestion.source_width) * 100,
+        height: (suggestion.crop.height / suggestion.source_height) * 100,
+      });
+      setCropping(true);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "无法生成裁剪框");
+    } finally {
+      setLoadingCrop(false);
+    }
+  };
+
+  const confirmCrop = async () => {
+    if (!crop || !sourceSize.width || !sourceSize.height) return;
+    setLoadingCrop(true);
+    try {
+      const result = await api.cropImage(image.id, {
+        x: Math.round((crop.x / 100) * sourceSize.width),
+        y: Math.round((crop.y / 100) * sourceSize.height),
+        width: Math.round((crop.width / 100) * sourceSize.width),
+        height: Math.round((crop.height / 100) * sourceSize.height),
+      });
+      onUpdated(result.image);
+      setCropping(false);
+      message.success(
+        `裁剪完成：${result.image.width}×${result.image.height}`,
+      );
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "裁剪失败");
+    } finally {
+      setLoadingCrop(false);
+    }
+  };
+
+  const confirmUpscale = () => {
+    modal.confirm({
+      title: `将图片短边提升到 ${targetShortSide}px？`,
+      content:
+        "将使用高质量重采样生成新文件并更新当前图片引用。原物理图片会保留，但重采样不能恢复原图中不存在的细节。",
+      okText: "确认提升",
+      cancelText: "取消",
+      onOk: async () => {
+        setUpscaling(true);
+        try {
+          const result = await api.upscaleImage(image.id, targetShortSide);
+          onUpdated(result.image);
+          message.success(
+            `分辨率提升完成：${result.image.width}×${result.image.height}`,
+          );
+        } catch (error) {
+          message.error(
+            error instanceof Error ? error.message : "分辨率提升失败",
+          );
+          throw error;
+        } finally {
+          setUpscaling(false);
+        }
+      },
+    });
+  };
+
+  const imageUrl = `/api/images/${encodeURIComponent(image.id)}/raw?v=${encodeURIComponent(image.sha256)}`;
+
+  if (cropping) {
+    return (
+      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Alert
+          type="info"
+          showIcon
+          message="拖动或缩放裁剪框，确认后会生成新文件并更新当前图片引用"
+          description="原物理图片会保留，其他引用不受影响。"
+        />
+        <Segmented
+          block
+          value={cropMode}
+          options={[
+            { label: "头部 1:1", value: "head" },
+            { label: "近景 3:4", value: "closeup" },
+          ]}
+          onChange={(value) => void startCrop(value as "head" | "closeup")}
+        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            maxHeight: "calc(100vh - 290px)",
+            overflow: "auto",
+            background: "#11141a",
+          }}
+        >
+          <ReactCrop
+            crop={crop}
+            onChange={(_, percentCrop) => setCrop(percentCrop)}
+            aspect={cropMode === "head" ? 1 : 3 / 4}
+            keepSelection
+          >
+            <img
+              src={imageUrl}
+              alt={image.title || image.id}
+              style={{ maxWidth: "100%", maxHeight: "calc(100vh - 310px)" }}
+            />
+          </ReactCrop>
+        </div>
+        <Space style={{ justifyContent: "flex-end", width: "100%" }}>
+          <Button onClick={() => setCropping(false)}>取消</Button>
+          <Button
+            type="primary"
+            icon={<ScissorOutlined />}
+            loading={loadingCrop}
+            disabled={!crop?.width || !crop?.height}
+            onClick={() => void confirmCrop()}
+          >
+            确认裁剪
+          </Button>
+        </Space>
+      </Space>
+    );
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Thumbnail
-        seed={image.thumbnail_hint || image.id}
-        imageId={image.id}
+      <Image
+        src={imageUrl}
+        alt={image.title || image.id}
         preview
-        size={280}
-        ratio={image.width / image.height}
+        width="100%"
+        style={{
+          maxHeight: "56vh",
+          objectFit: "contain",
+          borderRadius: 6,
+          background: "#1b1e26",
+        }}
       />
+      <Button
+        block
+        type="primary"
+        icon={<ScissorOutlined />}
+        loading={loadingCrop}
+        onClick={() => void startCrop("head")}
+      >
+        开始裁剪
+      </Button>
+      <Space align="center" style={{ width: "100%" }}>
+        <Typography.Text style={{ whiteSpace: "nowrap" }}>
+          目标短边
+        </Typography.Text>
+        <InputNumber
+          min={512}
+          max={4096}
+          step={128}
+          value={targetShortSide}
+          style={{ flex: 1 }}
+          onChange={(value) => setTargetShortSide(value ?? 1024)}
+        />
+        <Typography.Text type="secondary">px</Typography.Text>
+        <Button
+          icon={<ExpandOutlined />}
+          loading={upscaling}
+          onClick={confirmUpscale}
+        >
+          提升分辨率
+        </Button>
+      </Space>
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="ID">{image.id}</Descriptions.Item>
         <Descriptions.Item label="名称">
@@ -769,19 +955,42 @@ export function ImagesPage() {
 
   const confirmDeleteGroup = (group: ImageGroup) => {
     const count = images.filter((v) => v.group_id === group.id).length;
+    let deleteImages = false;
     modal.confirm({
       title: "删除分组",
       content:
         count > 0
-          ? `分组「${group.name}」内有 ${count} 张图片，删除后这些图片将移出分组（回到根目录），分组本身被删除。确定继续吗？`
+          ? (
+              <Space direction="vertical" size={12}>
+                <div>
+                  分组「{group.name}」内有 {count}
+                  张图片。默认只删除分组，图片将移到根目录。
+                </div>
+                <Checkbox
+                  onChange={(event) => {
+                    deleteImages = event.target.checked;
+                  }}
+                >
+                  同时从图片库删除组内图片
+                </Checkbox>
+                <div style={{ color: "#8c8c8c", fontSize: 12 }}>
+                  勾选后会删除图片记录。物理文件仅在 workspace/images
+                  中且没有其他图片记录引用时删除；共享文件和外部原图会保留。
+                </div>
+              </Space>
+            )
           : `确定要删除分组「${group.name}」吗？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       onOk: async () => {
         try {
-          await api.deleteImageGroup(group.id);
-          message.success("分组已删除");
+          const result = await api.deleteImageGroup(group.id, deleteImages);
+          message.success(
+            deleteImages
+              ? `分组已删除，同时删除 ${result.deleted_images} 张图片记录、${result.deleted_files} 个无引用托管文件`
+              : "分组已删除，图片已移到根目录",
+          );
           if (currentGroupId === group.id) setCurrentGroupId(null);
           refreshAll();
         } catch (err) {
@@ -1006,7 +1215,7 @@ export function ImagesPage() {
         title={
           selected ? `图片详情 · ${selected.title || selected.id}` : "图片详情"
         }
-        width={460}
+        width="50vw"
         open={selected !== null}
         onClose={() => setSelected(null)}
         destroyOnClose
@@ -1017,6 +1226,10 @@ export function ImagesPage() {
             groupName={
               groups.find((g) => g.id === selected.group_id)?.name ?? "未分组"
             }
+            onUpdated={(updated) => {
+              setSelected(updated);
+              refreshAll();
+            }}
           />
         )}
       </Drawer>

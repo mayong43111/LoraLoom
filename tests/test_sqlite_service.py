@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import tempfile
 
-from app.domain.enums import Orientation, ReviewStatus, Usability, VideoStatus
+from app.domain.enums import DatasetType, Orientation, ReviewStatus, Usability, VideoStatus
 from app.services.api import ImageCreate, ImageFilter, VideoCreate, VideoFilter
 from app.services.sqlite_service import SqliteDatasetService
 
@@ -283,6 +283,28 @@ def test_delete_image_group_moves_members_to_root() -> None:
     again = SqliteDatasetService(path)
     assert all(g.id != grp.id for g in again.list_image_groups())
     assert again.get_image(image.id).group_id is None
+
+
+def test_delete_image_group_can_delete_members_without_deleting_shared_copy() -> None:
+    service, path = _service()
+    grp = service.create_image_group("原组", "")
+    keep = service.create_image_group("精选组", "")
+    image = service.create_image(
+        ImageCreate(title="a.jpg", group_id=grp.id, path="workspace/images/a.jpg")
+    )
+    clone = service.copy_image(image.id, group_id=keep.id)
+    dataset = service.create_dataset("训练集", DatasetType.IMAGE)
+    service.add_dataset_items(dataset.id, [image.id, clone.id])
+
+    service.delete_image_group(grp.id, delete_images=True)
+
+    again = SqliteDatasetService(path)
+    assert all(g.id != grp.id for g in again.list_image_groups())
+    assert all(item.id != image.id for item in again.list_images())
+    assert again.get_image(clone.id).image_path == image.image_path
+    assert again.get_image(clone.id).group_id == keep.id
+    assert [item.id for item in again.list_dataset_images(dataset.id)] == [clone.id]
+    assert again.get_dataset(dataset.id).item_count == 1
 
 
 

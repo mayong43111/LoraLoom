@@ -1,7 +1,7 @@
 {
   "id": "image.pose-face-annotation",
   "name": "姿态·人脸标注",
-  "description": "选择分组或一组图片，逐图标注人物姿态（正对/侧面/背面）与人脸（数量、全脸/3-4脸/半脸），支持轻量自动识别，结果写入图片标签",
+  "description": "使用 YuNet 与 BlazePose 标注人物姿态、人脸、人物数量及近景/半身/全身景别，结果写入图片标签以便筛选",
   "scopes": ["image"],
   "selection": ["single", "multi"],
   "ui": "modal",

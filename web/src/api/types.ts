@@ -69,6 +69,7 @@ export interface AnnotatePayload {
   trigger_word?: string;
   prepend_trigger?: boolean;
   overwrite?: boolean;
+  excluded_aspects?: string[];
 }
 
 /** 单条标注结果。 */
@@ -85,7 +86,7 @@ export interface AnnotateResponse {
   results: AnnotateResult[];
 }
 
-/** 导出（Qwen-Image / ai-toolkit）可选项。 */
+/** 导出（ai-toolkit）可选项。 */
 export interface ExportBaseModel {
   value: string;
   label: string;
@@ -182,6 +183,26 @@ export interface ImageModel {
   group_id: string | null;
   tags: string[];
   created_at: string;
+}
+
+export interface ImageCropSuggestion {
+  image_id: string;
+  source_width: number;
+  source_height: number;
+  mode: "head" | "closeup";
+  crop: { x: number; y: number; width: number; height: number };
+}
+
+export interface ImageCropResult {
+  image: ImageModel;
+  previous_path: string;
+  output_path: string;
+}
+
+export interface ImageUpscaleResult {
+  image: ImageModel;
+  previous_path: string;
+  output_path: string;
 }
 
 export interface PersonCluster {

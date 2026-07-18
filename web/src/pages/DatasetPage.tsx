@@ -64,16 +64,48 @@ function formatDuration(seconds: number): string {
 }
 
 /** 人物形象标注可选的描述维度，动态拼进系统提示词。 */
-const CHARACTER_ASPECTS: { key: string; label: string; text: string }[] = [
-  { key: "gender", label: "性别", text: "the person's gender (man or woman)" },
-  { key: "hair", label: "发型", text: "hairstyle and hair color" },
-  { key: "clothing", label: "衣着", text: "clothing and outfit" },
-  { key: "pose", label: "姿势", text: "body pose and posture" },
-  { key: "background", label: "背景", text: "background and surrounding environment" },
+const CHARACTER_ASPECTS: {
+  key: string;
+  label: string;
+  text: string;
+  forbiddenText: string;
+}[] = [
+  {
+    key: "gender",
+    label: "性别",
+    text: "the person's gender",
+    forbiddenText: "gender or gendered words (for example man, woman, male, female, boy, girl, lady)",
+  },
+  {
+    key: "hair",
+    label: "发型",
+    text: "hairstyle and hair color",
+    forbiddenText: "hair, hairstyle, hair length, or hair color",
+  },
+  {
+    key: "clothing",
+    label: "衣着/鞋袜",
+    text: "clothing, outfit, and footwear",
+    forbiddenText: "clothing or footwear, including garments, outfit colors or materials, tops, pants, dresses, shoes, socks, and bare feet",
+  },
+  { key: "pose", label: "姿势", text: "body pose and posture", forbiddenText: "pose, posture, gesture, or body position" },
+  {
+    key: "framing",
+    label: "景别/裁切",
+    text: "shot framing and crop, such as full-body, three-quarter, half-body, or close-up",
+    forbiddenText: "shot framing, crop, camera distance, full-body, three-quarter, half-body, close-up, or which body parts are visible",
+  },
+  {
+    key: "background",
+    label: "背景",
+    text: "background and surrounding environment",
+    forbiddenText: "background, location, setting, environment, or surrounding objects",
+  },
   {
     key: "accessories",
     label: "饰品",
     text: "accessories such as jewelry, glasses, hats",
+    forbiddenText: "accessories, jewelry, glasses, hats, or earrings",
   },
 ];
 
@@ -109,22 +141,23 @@ const ANNOTATION_TEMPLATES: AnnotationTemplate[] = [
       const excluded = CHARACTER_ASPECTS.filter((a) => !aspects.includes(a.key));
       const parts: string[] = [
         "You are an expert dataset captioner for character/identity LoRA training.",
-        "Write a single concise, comma-separated caption describing the person in the image, suitable for training.",
+        "Write one concise, comma-separated training caption using ONLY the explicitly allowed categories below.",
+        "Do not add a general description of the person and do not mention a visible detail unless its category is allowed.",
       ];
       parts.push(
         chosen.length
-          ? `Describe the following aspects when visible: ${chosen
+          ? `ALLOWED CATEGORIES: ${chosen
               .map((a) => a.text)
               .join(", ")}.`
-          : "Focus only on the subject's core, consistent identity features (face, body type).",
+          : "ALLOWED CATEGORIES: none. Return an empty caption.",
       );
       if (excluded.length) {
         parts.push(
-          `STRICTLY FORBIDDEN: absolutely DO NOT describe or mention ${excluded
-            .map((a) => a.text)
+          `FORBIDDEN CATEGORIES: never describe or mention ${excluded
+            .map((a) => a.forbiddenText)
             .join(
               ", ",
-            )}. Never include any word related to these in the caption, even if clearly visible.`,
+            )}. Before answering, silently remove every comma-separated phrase that belongs to a forbidden category.`,
         );
       }
       parts.push("Do not invent details that are not visible.");
@@ -512,7 +545,7 @@ export function DatasetDetailPage() {
                       imageId={item.id}
                       preview
                       size={56}
-                      ratio={item.width / item.height}
+                      ratio={item.width > 0 && item.height > 0 ? item.width / item.height : 1}
                     />
                   ) : (
                     <Typography.Text>{item.title}</Typography.Text>
@@ -719,6 +752,7 @@ function AnnotateModal({
     "hair",
     "clothing",
     "pose",
+    "framing",
     "background",
     "accessories",
   ]);
@@ -821,6 +855,11 @@ function AnnotateModal({
               : undefined,
             prepend_trigger: template.supportsTrigger && prependTrigger,
             overwrite,
+            excluded_aspects: template.supportsAspects
+              ? CHARACTER_ASPECTS.filter(
+                  (aspect) => !aspects.includes(aspect.key),
+                ).map((aspect) => aspect.key)
+              : undefined,
           });
           all.push(...res.results);
         } catch (err) {
@@ -1028,12 +1067,13 @@ function AnnotateModal({
 
 /** 分辨率分桶预设。 */
 const RESOLUTION_OPTIONS = [
+  { label: "自动（按图片最高可用，最多 1024）", value: "auto" },
   { label: "512 / 768 / 1024（推荐）", value: "512,768,1024" },
   { label: "768 / 1024", value: "768,1024" },
   { label: "仅 1024", value: "1024" },
 ];
 
-/** 导出为 Qwen-Image / ai-toolkit 的 LoRA 训练包。 */
+/** 导出为 ai-toolkit 的 LoRA 训练包。 */
 function ExportModal({
   open,
   datasetId,
@@ -1053,7 +1093,7 @@ function ExportModal({
   const [preset, setPreset] = useState("character");
   const [scope, setScope] = useState<"selected" | "all">("all");
   const [onlyCaptioned, setOnlyCaptioned] = useState(true);
-  const [resolution, setResolution] = useState("512,768,1024");
+  const [resolution, setResolution] = useState("auto");
   const [rank, setRank] = useState<number | undefined>(undefined);
   const [stepsPerImage, setStepsPerImage] = useState<number | undefined>(
     undefined,
@@ -1096,7 +1136,10 @@ function ExportModal({
         preset,
         rank,
         steps_per_image: stepsPerImage,
-        resolution: resolution.split(",").map((r) => Number(r)),
+        resolution:
+          resolution === "auto"
+            ? undefined
+            : resolution.split(",").map((r) => Number(r)),
         item_ids: scope === "selected" ? selectedIds : undefined,
         only_captioned: onlyCaptioned,
       });
@@ -1120,7 +1163,7 @@ function ExportModal({
   return (
     <Modal
       open={open}
-      title="导出训练包（Qwen-Image / ai-toolkit）"
+      title="导出训练包（ai-toolkit LoRA）"
       width={640}
       onCancel={onClose}
       onOk={handleExport}
@@ -1141,7 +1184,7 @@ function ExportModal({
           />
           <Input
             style={{ marginTop: 6 }}
-            placeholder="或填写自定义模型名，如 Qwen/Qwen-Image"
+            placeholder="或填写自定义模型名，如 krea/Krea-2-Raw"
             value={baseModel}
             onChange={(e) => setBaseModel(e.target.value)}
           />

@@ -52,6 +52,8 @@ def _read_manifest(folder: Path) -> dict[str, Any] | None:
         return None
     plugin_id = meta.get("id") or folder.name
     entry = meta.get("entry", "index.js")
+    entry_path = folder / entry
+    entry_version = entry_path.stat().st_mtime_ns if entry_path.is_file() else 0
     backend = meta.get("backend", "handler.py")
     has_backend = bool(backend) and (folder / backend).exists()
     # selection：工具作用形态 single/multi，可为字符串或数组，规范化为列表。
@@ -71,7 +73,7 @@ def _read_manifest(folder: Path) -> dict[str, Any] | None:
         "scopes": meta.get("scopes", ["global"]),
         "selection": selection,
         "ui": meta.get("ui", "modal"),
-        "entry": f"/api/tool-assets/{folder.name}/{entry}",
+        "entry": f"/api/tool-assets/{folder.name}/{entry}?v={entry_version}",
         "has_backend": has_backend,
         # 仅供内部使用（不下发前端）。
         "_folder": folder.name,

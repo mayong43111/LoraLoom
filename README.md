@@ -53,6 +53,9 @@ tests/
 
 ## 运行
 
+Azure A100 上的 Qwen-Image LoRA 训练、监控和关机流程见
+[A100_TRAINING_RUNBOOK.md](A100_TRAINING_RUNBOOK.md)。
+
 需两个终端：后端 API 与前端 dev server。
 
 后端：

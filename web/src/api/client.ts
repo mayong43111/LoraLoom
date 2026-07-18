@@ -23,6 +23,9 @@ import type {
   ImageFilterParams,
   ImageGroup,
   ImageModel,
+  ImageCropResult,
+  ImageCropSuggestion,
+  ImageUpscaleResult,
   ImageUpdatePayload,
   ImportBatch,
   LlmConfig,
@@ -92,6 +95,23 @@ export const api = {
       `/images${buildQuery(filter as Record<string, string | undefined>)}`,
     ),
   getImage: (imageId: string) => request<ImageModel>(`/images/${imageId}`),
+  getImageCropSuggestion: (imageId: string, mode: "head" | "closeup") =>
+    request<ImageCropSuggestion>(
+      `/images/${imageId}/crop-suggestion?mode=${mode}`,
+    ),
+  cropImage: (
+    imageId: string,
+    crop: { x: number; y: number; width: number; height: number },
+  ) =>
+    request<ImageCropResult>(`/images/${imageId}/crop`, {
+      method: "POST",
+      body: JSON.stringify(crop),
+    }),
+  upscaleImage: (imageId: string, targetShortSide: number) =>
+    request<ImageUpscaleResult>(`/images/${imageId}/upscale`, {
+      method: "POST",
+      body: JSON.stringify({ target_short_side: targetShortSide }),
+    }),
   listImageGroups: () => request<ImageGroup[]>("/image-groups"),
   createImageGroup: (payload: { name: string; description?: string }) =>
     request<ImageGroup>("/image-groups", {
@@ -106,8 +126,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  deleteImageGroup: (groupId: string) =>
-    request<void>(`/image-groups/${groupId}`, { method: "DELETE" }),
+  deleteImageGroup: (groupId: string, deleteImages = false) =>
+    request<{ deleted: string; deleted_images: number; deleted_files: number }>(
+      `/image-groups/${groupId}?delete_images=${deleteImages}`,
+      { method: "DELETE" },
+    ),
   createImage: (payload: ImageCreatePayload) =>
     request<ImageModel>("/images", {
       method: "POST",

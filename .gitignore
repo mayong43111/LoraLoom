@@ -23,3 +23,7 @@ workspace/
 # 系统
 .DS_Store
 Thumbs.db
+
+tmp/
+project_test_assets/
+scripts/

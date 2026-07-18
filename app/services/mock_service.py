@@ -156,12 +156,18 @@ class MockDatasetService(DatasetService):
             group.description = description
         return group
 
-    def delete_image_group(self, group_id: str) -> None:
+    def delete_image_group(self, group_id: str, *, delete_images: bool = False) -> None:
         group = self._image_group_index.get(group_id)
         if group is None:
             raise ServiceError(f"分组不存在: {group_id}")
-        for img in self._data.images:
-            if img.group_id == group_id:
+        members = [img for img in self._data.images if img.group_id == group_id]
+        if delete_images:
+            member_ids = {img.id for img in members}
+            self._data.images = [img for img in self._data.images if img.id not in member_ids]
+            for image_id in member_ids:
+                del self._image_index[image_id]
+        else:
+            for img in members:
                 img.group_id = None
         self._data.image_groups = [
             g for g in self._data.image_groups if g.id != group_id
@@ -268,6 +274,10 @@ class MockDatasetService(DatasetService):
         tags: list[str] | None = None,
         caption: str | None = None,
         group_id: object = UNSET,
+        image_path: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        sha256: str | None = None,
     ) -> Image:
         image = self.get_image(image_id)
         if title is not None:
@@ -276,6 +286,14 @@ class MockDatasetService(DatasetService):
             image.tags = list(tags)
         if caption is not None:
             image.caption = caption
+        if image_path is not None:
+            image.image_path = image_path
+        if width is not None:
+            image.width = width
+        if height is not None:
+            image.height = height
+        if sha256 is not None:
+            image.sha256 = sha256
         if group_id is not UNSET and group_id != image.group_id:
             if group_id is not None and group_id not in self._image_group_index:
                 raise ServiceError(f"分组不存在: {group_id}")

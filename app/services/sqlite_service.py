@@ -285,20 +285,43 @@ class SqliteDatasetService(DatasetService):
         )
         return group
 
-    def delete_image_group(self, group_id: str) -> None:
-        row = self._fetchone(
-            "SELECT 1 FROM image_groups WHERE id = ?", (group_id,)
-        )
-        if row is None:
-            raise ServiceError(f"分组不存在: {group_id}")
-        images = self.list_images(ImageFilter(group_id=group_id))
-        for image in images:
-            image.group_id = None
-            self._write(
-                "UPDATE images SET group_id = NULL, doc = ? WHERE id = ?",
-                (mapping.to_json(image), image.id),
-            )
-        self._write("DELETE FROM image_groups WHERE id = ?", (group_id,))
+    def delete_image_group(self, group_id: str, *, delete_images: bool = False) -> None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM image_groups WHERE id = ?", (group_id,)
+            ).fetchone()
+            if row is None:
+                raise ServiceError(f"分组不存在: {group_id}")
+            try:
+                if delete_images:
+                    member_rows = self._conn.execute(
+                        "SELECT id FROM images WHERE group_id = ?", (group_id,)
+                    ).fetchall()
+                    self._conn.executemany(
+                        "DELETE FROM dataset_items WHERE item_id = ? AND kind = 'image'",
+                        [(member["id"],) for member in member_rows],
+                    )
+                    self._conn.execute(
+                        "DELETE FROM images WHERE group_id = ?", (group_id,)
+                    )
+                else:
+                    rows = self._conn.execute(
+                        "SELECT id, doc FROM images WHERE group_id = ?", (group_id,)
+                    ).fetchall()
+                    for image_row in rows:
+                        image = mapping.image_from_dict(self._doc(image_row))
+                        image.group_id = None
+                        self._conn.execute(
+                            "UPDATE images SET group_id = NULL, doc = ? WHERE id = ?",
+                            (mapping.to_json(image), image.id),
+                        )
+                self._conn.execute(
+                    "DELETE FROM image_groups WHERE id = ?", (group_id,)
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
         clauses: list[str] = []
@@ -424,6 +447,10 @@ class SqliteDatasetService(DatasetService):
         tags: list[str] | None = None,
         caption: str | None = None,
         group_id: object = UNSET,
+        image_path: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        sha256: str | None = None,
     ) -> Image:
         image = self.get_image(image_id)
         old_group = image.group_id
@@ -433,6 +460,14 @@ class SqliteDatasetService(DatasetService):
             image.tags = list(tags)
         if caption is not None:
             image.caption = caption
+        if image_path is not None:
+            image.image_path = image_path
+        if width is not None:
+            image.width = width
+        if height is not None:
+            image.height = height
+        if sha256 is not None:
+            image.sha256 = sha256
         new_group = old_group
         if group_id is not UNSET and group_id != old_group:
             if group_id is not None:

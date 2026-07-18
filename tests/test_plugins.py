@@ -25,6 +25,8 @@ def test_discover_includes_bundled_plugins() -> None:
     ids = {p["id"] for p in discover_plugins()}
     assert "video.frame-extraction" in ids
     assert "image.pose-face-annotation" in ids
+    assert "image.similar-selection" in ids
+    assert "image.training-curation" in ids
 
 
 def test_frame_extraction_manifest_is_video_scoped() -> None:
@@ -32,7 +34,7 @@ def test_frame_extraction_manifest_is_video_scoped() -> None:
         p for p in discover_plugins() if p["id"] == "video.frame-extraction"
     )
     assert plugin["scopes"] == ["video"]
-    assert "entry" in plugin and plugin["entry"].endswith("index.js")
+    assert "entry" in plugin and "/index.js?v=" in plugin["entry"]
     assert plugin["ui"] == "modal"
     assert plugin["selection"] == ["single"]
     assert plugin["has_backend"] is True

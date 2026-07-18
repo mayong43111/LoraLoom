@@ -7,14 +7,14 @@
  * 流程：
  *   1) 选择输入 —— 不默认全部。可「按分组」选择一个/多个分组，或「指定图片」
  *      从当前列表中多选。从行/批量/分组入口带 `context.target` 进入时直接开始。
- *   2) 逐图标注 —— 人物姿态（正对/侧面/背面）、人脸（全脸/3-4脸/半脸/无脸）、
- *      人脸数量。支持「自动识别」（后端 handler.py 用 OpenCV 自带 Haar 级联做
- *      轻量预标注），识别结果作为建议，用户复核后写入。
+ *   2) 逐图标注 —— 人物姿态、景别、人脸完整度与人物数量。自动识别使用
+ *      OpenCV YuNet 与 BlazePose，识别结果作为建议，用户可复核后写入。
  *
  * 标注结果以**标签**写入图片（`api.updateImage(id, {tags})`）：
  *   - `姿态:正对 / 姿态:侧面 / 姿态:背面`
+ *   - `景别:近景 / 景别:半身 / 景别:全身`
  *   - `人脸:全脸 / 人脸:3-4脸 / 人脸:半脸 / 人脸:无脸`
- *   - `人脸数:N`
+ *   - `人物数:N`
  * 重新标注时会先剔除同前缀的旧标签再写入，实现幂等替换；不改动其它标签。
  */
 const toolkit = window.DatasetToolkit;
@@ -63,20 +63,31 @@ const FACE_OPTS = [
   { label: "无脸", value: "none" },
   { label: "未知", value: "unknown" },
 ];
+const SHOT_OPTS = [
+  { label: "近景", value: "closeup" },
+  { label: "半身", value: "half" },
+  { label: "全身", value: "full" },
+  { label: "未知", value: "unknown" },
+];
 
 const P_ORIENT = "姿态:";
 const P_FACE = "人脸:";
-const P_COUNT = "人脸数:";
+const P_SHOT = "景别:";
+const P_COUNT = "人物数:";
+const P_LEGACY_COUNT = "人脸数:";
 
 const ORIENT_TAG = { front: "正对", side: "侧面", back: "背面" };
 const FACE_TAG = { full: "全脸", three_quarter: "3-4脸", half: "半脸", none: "无脸" };
+const SHOT_TAG = { closeup: "近景", half: "半身", full: "全身" };
 const ORIENT_FROM = { 正对: "front", 侧面: "side", 背面: "back" };
 const FACE_FROM = { 全脸: "full", "3-4脸": "three_quarter", 半脸: "half", 无脸: "none" };
+const SHOT_FROM = { 近景: "closeup", 半身: "half", 全身: "full" };
 
 /** 从图片已有标签解析出当前标注状态（用于回显/再标注）。 */
 function stateFromTags(img) {
   let orientation = "unknown";
   let face = "unknown";
+  let shot = "unknown";
   let person_count = 0;
   (img.tags || []).forEach(function (t) {
     if (t.indexOf(P_ORIENT) === 0) {
@@ -85,12 +96,16 @@ function stateFromTags(img) {
     } else if (t.indexOf(P_FACE) === 0) {
       const v = FACE_FROM[t.slice(P_FACE.length)];
       if (v) face = v;
-    } else if (t.indexOf(P_COUNT) === 0) {
-      const n = parseInt(t.slice(P_COUNT.length), 10);
+    } else if (t.indexOf(P_SHOT) === 0) {
+      const v = SHOT_FROM[t.slice(P_SHOT.length)];
+      if (v) shot = v;
+    } else if (t.indexOf(P_COUNT) === 0 || t.indexOf(P_LEGACY_COUNT) === 0) {
+      const prefix = t.indexOf(P_COUNT) === 0 ? P_COUNT : P_LEGACY_COUNT;
+      const n = parseInt(t.slice(prefix.length), 10);
       if (!isNaN(n)) person_count = n;
     }
   });
-  return { orientation: orientation, face: face, person_count: person_count };
+  return { orientation: orientation, face: face, shot: shot, person_count: person_count };
 }
 
 /** 由标注状态生成带前缀的标签数组。未知项不产生标签。 */
@@ -98,6 +113,7 @@ function tagsFromState(s) {
   const out = [];
   if (ORIENT_TAG[s.orientation]) out.push(P_ORIENT + ORIENT_TAG[s.orientation]);
   if (FACE_TAG[s.face]) out.push(P_FACE + FACE_TAG[s.face]);
+  if (SHOT_TAG[s.shot]) out.push(P_SHOT + SHOT_TAG[s.shot]);
   if (typeof s.person_count === "number" && s.person_count >= 0) {
     out.push(P_COUNT + s.person_count);
   }
@@ -107,7 +123,8 @@ function tagsFromState(s) {
 /** 合并标签：剔除本工具同前缀的旧标签，追加新标签并去重。 */
 function mergeTags(existing, fresh) {
   const kept = (existing || []).filter(function (t) {
-    return t.indexOf(P_ORIENT) !== 0 && t.indexOf(P_FACE) !== 0 && t.indexOf(P_COUNT) !== 0;
+    return t.indexOf(P_ORIENT) !== 0 && t.indexOf(P_FACE) !== 0 &&
+      t.indexOf(P_SHOT) !== 0 && t.indexOf(P_COUNT) !== 0 && t.indexOf(P_LEGACY_COUNT) !== 0;
   });
   const seen = {};
   const out = [];
@@ -352,10 +369,11 @@ function PoseFaceTool(props) {
         chunks[c].forEach(function (id) {
           const r = rmap[id];
           if (!r || !r.ok) return;
-          const base = annos[id] || { orientation: "unknown", face: "unknown", person_count: 0 };
+          const base = annos[id] || { orientation: "unknown", face: "unknown", shot: "unknown", person_count: 0 };
           computed[id] = {
             orientation: r.orientation || base.orientation,
             face: r.face || base.face,
+            shot: r.shot && r.shot !== "unknown" ? r.shot : base.shot,
             person_count: typeof r.person_count === "number" ? r.person_count : base.person_count,
             _suggested: true,
           };
@@ -595,7 +613,12 @@ function PoseFaceTool(props) {
               onChange: function (v) { setField(current.id, "face", v); } }),
           ),
           h("div", null,
-            h(Title, { level: 5, style: { marginBottom: 8 } }, "人脸数量"),
+            h(Title, { level: 5, style: { marginBottom: 8 } }, "人物景别"),
+            h(Segmented, { block: true, options: SHOT_OPTS, value: anno.shot,
+              onChange: function (v) { setField(current.id, "shot", v); } }),
+          ),
+          h("div", null,
+            h(Title, { level: 5, style: { marginBottom: 8 } }, "人物数量"),
             h(InputNumber, { min: 0, max: 999, style: { width: 160 }, value: anno.person_count,
               onChange: function (v) { setField(current.id, "person_count", typeof v === "number" ? v : 0); } }),
           ),

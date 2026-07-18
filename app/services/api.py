@@ -150,8 +150,8 @@ class DatasetService(ABC):
         """编辑图片分组名称/描述；``None`` 表示该字段不改动。"""
 
     @abstractmethod
-    def delete_image_group(self, group_id: str) -> None:
-        """删除图片分组，其中的图片会被移出分组（回到根目录）。"""
+    def delete_image_group(self, group_id: str, *, delete_images: bool = False) -> None:
+        """删除图片分组；成员图片可一并删除，否则移到根目录。"""
 
     @abstractmethod
     def list_images(self, image_filter: ImageFilter | None = None) -> Sequence[Image]:
@@ -174,12 +174,16 @@ class DatasetService(ABC):
         tags: list[str] | None = None,
         caption: str | None = None,
         group_id: Any = UNSET,
+        image_path: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        sha256: str | None = None,
     ) -> Image:
         """编辑图片基本信息或移动分组。
 
         ``title``/``tags`` 为 ``None`` 表示不改动；``group_id`` 为 ``UNSET``
         表示保持分组不变，为 ``None`` 表示移出分组（回到根目录）。
-        分辨率等硬指标不可编辑。
+        文件路径、分辨率和哈希仅供导入、裁剪等受控服务端流程更新。
         """
 
     @abstractmethod

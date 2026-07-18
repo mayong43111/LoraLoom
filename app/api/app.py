@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
+import hashlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image as PILImage, ImageOps
 
 from app.api.deps import get_service
 from app.api.plugins import (
@@ -64,6 +68,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_CAPTION_FORBIDDEN_PATTERNS = {
+    "gender": re.compile(
+        r"\b(?:man|woman|male|female|boy|girl|lady|gentleman)\b|男人|女人|男性|女性|男孩|女孩|女士|先生",
+        re.IGNORECASE,
+    ),
+    "hair": re.compile(
+        r"\b(?:hair|hairstyle|haired|bangs|ponytail|braids?)\b|头发|发型|刘海|马尾|辫子",
+        re.IGNORECASE,
+    ),
+    "clothing": re.compile(
+        r"\b(?:clothing|clothes|outfit|garment|top|shirt|t-shirt|blouse|jacket|coat|dress|skirt|pants|trousers|shorts|leggings|sportswear|uniform|shoe|shoes|sneakers?|boots?|sandals?|slippers?|socks?|stockings?|footwear|barefoot|bare feet)\b|衣着|衣服|上衣|衬衫|外套|裙子|裤子|短裤|鞋|袜|赤足|赤脚|光脚",
+        re.IGNORECASE,
+    ),
+    "pose": re.compile(
+        r"\b(?:pose|posture|standing|sitting|seated|lying|kneeling|squatting|walking|running|jumping|gesture|arms? raised|hands? on hips)\b|姿势|站立|坐着|坐姿|躺着|跪着|下蹲|行走|跑步|跳跃|手势",
+        re.IGNORECASE,
+    ),
+    "framing": re.compile(
+        r"\b(?:full[- ]body|three[- ]quarter|half[- ]body|upper[- ]body|close[- ]up|headshot|portrait crop|wide shot|medium shot)\b|全身|四分之三身|半身|上半身|近景|特写|头像|远景|中景",
+        re.IGNORECASE,
+    ),
+    "background": re.compile(
+        r"\b(?:background|setting|environment|indoors?|outdoors?|room|gym|studio|wall|floor|curtain|door|window|furniture)\b|背景|环境|室内|室外|房间|健身房|墙|地板|窗帘|门|窗|家具",
+        re.IGNORECASE,
+    ),
+    "accessories": re.compile(
+        r"\b(?:accessory|accessories|jewelry|glasses|eyeglasses|spectacles|hat|cap|earrings?|necklace|bracelet|watch)\b|饰品|配饰|首饰|眼镜|帽子|耳环|项链|手链|手表",
+        re.IGNORECASE,
+    ),
+}
+
+
+def _caption_forbidden_aspects(caption: str, excluded_aspects: list[str]) -> list[str]:
+    """返回 Caption 中实际出现的已排除描述类别。"""
+    return [
+        aspect
+        for aspect in excluded_aspects
+        if (pattern := _CAPTION_FORBIDDEN_PATTERNS.get(aspect))
+        and pattern.search(caption)
+    ]
+
 
 def _parse_enum(enum_type: type, raw: str | None):
     """把查询字符串解析为枚举；非法值返回 400。"""
@@ -73,6 +118,37 @@ def _parse_enum(enum_type: type, raw: str | None):
         return enum_type(raw)
     except ValueError as exc:  # noqa: PERF203 - 边界校验
         raise HTTPException(status_code=400, detail=f"非法取值: {raw}") from exc
+
+
+def _normalized_path(raw_path: str) -> str:
+    return os.path.normcase(str(Path(raw_path).resolve(strict=False)))
+
+
+def _delete_unreferenced_managed_images(
+    candidate_paths: list[str], referenced_paths: set[str]
+) -> int:
+    """删除托管目录内已无图片记录引用的文件。"""
+    managed_root = (Path.cwd() / "workspace" / "images").resolve(strict=False)
+    normalized_references = {
+        _normalized_path(path) for path in referenced_paths if path
+    }
+    deleted = 0
+    for raw_path in set(candidate_paths):
+        if not raw_path:
+            continue
+        path = Path(raw_path).resolve(strict=False)
+        try:
+            path.relative_to(managed_root)
+        except ValueError:
+            continue
+        if _normalized_path(raw_path) in normalized_references or not path.is_file():
+            continue
+        try:
+            path.unlink()
+            deleted += 1
+        except OSError:
+            continue
+    return deleted
 
 
 # -- 元信息 -----------------------------------------------------------------
@@ -186,13 +262,29 @@ def update_image_group(
 
 @app.delete("/api/image-groups/{group_id}")
 def delete_image_group(
-    group_id: str, service: DatasetService = Depends(get_service)
+    group_id: str,
+    delete_images: bool = Query(default=False),
+    service: DatasetService = Depends(get_service),
 ) -> Any:
+    members = list(service.list_images(ImageFilter(group_id=group_id)))
+    candidate_paths = [image.image_path for image in members]
     try:
-        service.delete_image_group(group_id)
+        service.delete_image_group(group_id, delete_images=delete_images)
     except ServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"deleted": group_id}
+    deleted_files = 0
+    if delete_images:
+        referenced_paths = {
+            image.image_path for image in service.list_images() if image.image_path
+        }
+        deleted_files = _delete_unreferenced_managed_images(
+            candidate_paths, referenced_paths
+        )
+    return {
+        "deleted": group_id,
+        "deleted_images": len(members) if delete_images else 0,
+        "deleted_files": deleted_files,
+    }
 
 
 @app.get("/api/images")
@@ -269,8 +361,204 @@ def get_image_raw(
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "no-cache"},
     )
+
+
+_IMAGE_DIR = Path.cwd() / "workspace" / "images"
+_FACE_MODEL = (
+    Path(__file__).resolve().parents[1]
+    / "plugins"
+    / "pose-face-annotation"
+    / "models"
+    / "face_detection_yunet_2023mar.onnx"
+)
+
+
+def _fit_image_crop(
+    center_x: float,
+    top: float,
+    crop_width: float,
+    crop_height: float,
+    image_width: int,
+    image_height: int,
+) -> dict[str, int]:
+    width = min(round(crop_width), image_width)
+    height = min(round(crop_height), image_height)
+    left = round(max(0.0, min(center_x - width / 2, image_width - width)))
+    top_int = round(max(0.0, min(top, image_height - height)))
+    return {"x": left, "y": top_int, "width": width, "height": height}
+
+
+@app.get("/api/images/{image_id}/crop-suggestion")
+def get_image_crop_suggestion(
+    image_id: str,
+    mode: str = Query("head", pattern="^(head|closeup)$"),
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        import cv2
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="自动裁剪需要 OpenCV 与 NumPy") from exc
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    path = Path(image.image_path or "")
+    data = np.fromfile(path, dtype=np.uint8) if path.is_file() else np.array([], dtype=np.uint8)
+    source = cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
+    if source is None:
+        raise HTTPException(status_code=400, detail="图片文件无法读取")
+    image_height, image_width = source.shape[:2]
+    scale = min(1.0, 1280 / max(image_width, image_height))
+    detected = source if scale == 1 else cv2.resize(source, (round(image_width * scale), round(image_height * scale)))
+    if not _FACE_MODEL.is_file():
+        raise HTTPException(status_code=503, detail="缺少人脸检测模型")
+    detector = cv2.FaceDetectorYN.create(str(_FACE_MODEL), "", (detected.shape[1], detected.shape[0]), 0.6, 0.3, 5000)
+    _, faces = detector.detect(detected)
+    if faces is None or len(faces) == 0:
+        raise HTTPException(status_code=422, detail="未检测到人脸，请选择其他图片")
+    face = max(faces, key=lambda row: float(row[2]) * float(row[3])).copy()
+    face[:4] /= scale
+    x, y, face_width, face_height = (float(face[index]) for index in range(4))
+    center_x = x + face_width / 2
+    if mode == "head":
+        box = _fit_image_crop(center_x, y - face_height * 0.72, face_height * 2.35, face_height * 2.35, image_width, image_height)
+    else:
+        crop_height = face_height * 4.6
+        box = _fit_image_crop(center_x, y - face_height * 0.78, crop_height * 0.75, crop_height, image_width, image_height)
+    return {"image_id": image_id, "source_width": image_width, "source_height": image_height, "mode": mode, "crop": box}
+
+
+@app.post("/api/images/{image_id}/crop")
+def crop_image(
+    image_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    source_path = Path(image.image_path or "")
+    previous_path = image.image_path
+    if not source_path.is_file():
+        raise HTTPException(status_code=400, detail="图片文件不存在")
+    try:
+        with PILImage.open(source_path) as loaded:
+            source = ImageOps.exif_transpose(loaded).convert("RGB")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="图片文件无法读取") from exc
+    try:
+        left = int(payload["x"])
+        top = int(payload["y"])
+        width = int(payload["width"])
+        height = int(payload["height"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="裁剪范围格式错误") from exc
+    if width < 256 or height < 256:
+        raise HTTPException(status_code=400, detail="裁剪结果至少需要 256×256 像素")
+    if left < 0 or top < 0 or left + width > source.width or top + height > source.height:
+        raise HTTPException(status_code=400, detail="裁剪范围超出原图")
+    cropped = source.crop((left, top, left + width, top + height))
+    _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    output = _IMAGE_DIR / f"crop-edit-{uuid4().hex[:16]}.jpg"
+    cropped.save(output, format="JPEG", quality=95, optimize=True)
+    try:
+        stored_path = output.relative_to(Path.cwd())
+    except ValueError:
+        stored_path = output
+    relative_path = str(stored_path).replace("\\", "/")
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()[:16]
+    tags = list(dict.fromkeys([*image.tags, "人工裁剪", f"裁剪来源:{image_id}"]))
+    try:
+        updated = service.update_image(
+            image_id,
+            image_path=relative_path,
+            width=cropped.width,
+            height=cropped.height,
+            sha256=digest,
+            tags=tags,
+        )
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    return {"image": to_jsonable(updated), "previous_path": previous_path, "output_path": relative_path}
+
+
+@app.post("/api/images/{image_id}/upscale")
+def upscale_image(
+    image_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    source_path = Path(image.image_path or "")
+    previous_path = image.image_path
+    if not source_path.is_file():
+        raise HTTPException(status_code=400, detail="图片文件不存在")
+    try:
+        target_short_side = int(payload["target_short_side"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="目标短边格式错误") from exc
+    if target_short_side < 512 or target_short_side > 4096:
+        raise HTTPException(status_code=400, detail="目标短边需要在 512 到 4096 之间")
+    try:
+        with PILImage.open(source_path) as loaded:
+            source = ImageOps.exif_transpose(loaded).convert("RGB")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="图片文件无法读取") from exc
+    source_short_side = min(source.size)
+    if target_short_side <= source_short_side:
+        raise HTTPException(
+            status_code=400,
+            detail=f"目标短边必须大于当前短边 {source_short_side}",
+        )
+    scale = target_short_side / source_short_side
+    target_size = (
+        round(source.width * scale),
+        round(source.height * scale),
+    )
+    upscaled = source.resize(target_size, PILImage.Resampling.LANCZOS)
+    _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    output = _IMAGE_DIR / f"upscale-{uuid4().hex[:16]}.jpg"
+    upscaled.save(output, format="JPEG", quality=95, optimize=True)
+    try:
+        stored_path = output.relative_to(Path.cwd())
+    except ValueError:
+        stored_path = output
+    relative_path = str(stored_path).replace("\\", "/")
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()[:16]
+    tags = list(
+        dict.fromkeys(
+            [
+                *image.tags,
+                "分辨率提升",
+                f"提升来源:{source.width}x{source.height}",
+            ]
+        )
+    )
+    try:
+        updated = service.update_image(
+            image_id,
+            image_path=relative_path,
+            width=upscaled.width,
+            height=upscaled.height,
+            sha256=digest,
+            tags=tags,
+        )
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    return {
+        "image": to_jsonable(updated),
+        "previous_path": previous_path,
+        "output_path": relative_path,
+    }
 
 
 
@@ -902,7 +1190,8 @@ def annotate_dataset_items(
           "user_text": "...",             # 可选，用户侧提示
           "trigger_word": "...",          # 可选，触发词
           "prepend_trigger": true,         # 是否把触发词加入生成答案
-          "overwrite": true                # 是否覆盖已有 Caption（false 时仅填补空的）
+          "overwrite": true,               # 是否覆盖已有 Caption（false 时仅填补空的）
+          "excluded_aspects": ["clothing"] # 可选，答案中禁止出现的描述类别
         }
 
     仅覆盖当前数据集内的 Caption（copy-on-write），不影响素材库原图。
@@ -918,6 +1207,16 @@ def annotate_dataset_items(
     trigger_word = str(payload.get("trigger_word") or "").strip()
     prepend_trigger = bool(payload.get("prepend_trigger"))
     overwrite = bool(payload.get("overwrite", True))
+    raw_excluded_aspects = payload.get("excluded_aspects") or []
+    if not isinstance(raw_excluded_aspects, list) or not all(
+        isinstance(aspect, str) for aspect in raw_excluded_aspects
+    ):
+        raise HTTPException(status_code=400, detail="excluded_aspects 必须为字符串数组")
+    excluded_aspects = [
+        aspect
+        for aspect in dict.fromkeys(raw_excluded_aspects)
+        if aspect in _CAPTION_FORBIDDEN_PATTERNS
+    ]
 
     try:
         ds = service.get_dataset(dataset_id)
@@ -955,6 +1254,20 @@ def annotate_dataset_items(
             with open(path, "rb") as fh:
                 data = fh.read()
             answer = settings.caption_image(system_prompt, data, mime, user_text)
+            violations = _caption_forbidden_aspects(answer, excluded_aspects)
+            if violations:
+                retry_prompt = (
+                    f"{system_prompt} Your previous answer violated these forbidden "
+                    f"categories: {', '.join(violations)}. Regenerate the caption and "
+                    "remove every phrase from those categories."
+                )
+                answer = settings.caption_image(retry_prompt, data, mime, user_text)
+                violations = _caption_forbidden_aspects(answer, excluded_aspects)
+                if violations:
+                    raise settings.LLMError(
+                        "Caption 仍包含已关闭的描述维度："
+                        + ", ".join(violations)
+                    )
             caption = answer
             if prepend_trigger and trigger_word:
                 caption = f"{trigger_word}, {answer}" if answer else trigger_word
@@ -970,7 +1283,7 @@ def annotate_dataset_items(
 
 @app.get("/api/datasets/export/options")
 def get_export_options() -> dict[str, Any]:
-    """返回导出（Qwen-Image / ai-toolkit）可选的底模与训练预设。"""
+    """返回导出（ai-toolkit）可选的底模与训练预设。"""
     presets = [
         {
             "value": key,
@@ -989,7 +1302,7 @@ def export_dataset(
     payload: dict[str, Any],
     service: DatasetService = Depends(get_service),
 ) -> Response:
-    """把图片数据集导出为 Qwen-Image / ai-toolkit 的 LoRA 训练包（zip）。
+    """把图片数据集导出为 ai-toolkit 的 LoRA 训练包（zip）。
 
     请求体（均可选，缺省走预设）::
 

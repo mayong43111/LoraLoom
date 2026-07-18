@@ -1,0 +1,10 @@
+{
+  "id": "image.similar-selection",
+  "name": "相似图片精选",
+  "description": "将图片组中的近重复画面聚类，每组推荐一张质量最佳图片，并复制到新建或已有分组",
+  "scopes": ["image"],
+  "selection": ["multi", "group"],
+  "ui": "modal",
+  "entry": "index.js",
+  "backend": "handler.py"
+}
