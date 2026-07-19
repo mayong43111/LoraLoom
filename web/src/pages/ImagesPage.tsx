@@ -306,7 +306,7 @@ function ImageDetail({
   );
 }
 
-function BatchCropModal({
+export function BatchCropModal({
   open,
   images,
   onClose,

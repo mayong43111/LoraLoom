@@ -2,7 +2,7 @@
 
 统一入口 ``invoke(action, payload, service)``，由宿主
 ``POST /api/tools/video.frame-extraction/invoke`` 分发。实现见
-``FRAME_EXTRACTION_DESIGN.md`` §5：
+``docs/FRAME_EXTRACTION_DESIGN.md`` §5：
 
 - ``probe``          读取视频元数据（时长/帧率/分辨率/路径），走数据层，无需解码。
 - ``filmstrip``      均匀采样若干缩略图，用于进度条下方的胶片条。

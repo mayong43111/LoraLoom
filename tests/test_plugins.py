@@ -13,12 +13,13 @@ from app.api.plugins import (
     discover_plugins,
     invoke_plugin,
 )
+from app.services.mock_data import MockDataset
 from app.services.sqlite_service import SqliteDatasetService
 
 
 def _service() -> SqliteDatasetService:
     path = os.path.join(tempfile.mkdtemp(), "dataset.sqlite")
-    return SqliteDatasetService(path)
+    return SqliteDatasetService(path, seed_data=MockDataset())
 
 
 def test_discover_includes_bundled_plugins() -> None:

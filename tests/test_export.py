@@ -5,6 +5,7 @@ import yaml
 from app.services.export import (
     BASE_MODELS,
     ExportOptions,
+    TRAINING_PRESETS,
     build_aitoolkit_config,
     resolve_hyperparams,
 )
@@ -48,3 +49,25 @@ def test_qwen_export_profile_is_unchanged() -> None:
     assert "timestep_type" not in process["train"]
     assert process["sample"]["guidance_scale"] == 4
     assert process["sample"]["sample_steps"] == 25
+
+
+def test_explicit_learning_rate_overrides_model_profile() -> None:
+    opts = ExportOptions(
+        base_model="krea/Krea-2-Raw",
+        preset="style",
+        learning_rate=7e-5,
+    )
+
+    hyperparams = resolve_hyperparams(opts, image_count=20, auto_resolution=[1024])
+
+    assert hyperparams["lr"] == 7e-5
+
+
+def test_training_presets_define_complete_recommendations() -> None:
+    for preset in TRAINING_PRESETS.values():
+        assert preset["rank"] > 0
+        assert preset["steps_per_image"] > 0
+        assert preset["lr"] > 0
+        assert preset["min_steps"] <= preset["max_steps"]
+        assert preset["trigger_word"]
+        assert preset["sample_prompts"]

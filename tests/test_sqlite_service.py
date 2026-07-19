@@ -11,12 +11,22 @@ import tempfile
 
 from app.domain.enums import DatasetType, Orientation, ReviewStatus, Usability, VideoStatus
 from app.services.api import ImageCreate, ImageFilter, VideoCreate, VideoFilter
+from app.services.mock_data import MockDataset
 from app.services.sqlite_service import SqliteDatasetService
 
 
 def _service() -> tuple[SqliteDatasetService, str]:
     path = os.path.join(tempfile.mkdtemp(), "dataset.sqlite")
-    return SqliteDatasetService(path), path
+    return SqliteDatasetService(path, seed_data=MockDataset()), path
+
+
+def test_new_database_is_empty_by_default() -> None:
+    path = os.path.join(tempfile.mkdtemp(), "dataset.sqlite")
+    service = SqliteDatasetService(path)
+
+    assert service.list_images() == []
+    assert service.list_videos() == []
+    assert service.list_people() == []
 
 
 def test_seed_populates_core_entities() -> None:

@@ -55,13 +55,17 @@ web/                 前端应用
     layout/            应用外壳（侧栏 + 顶栏）
     pages/             数据集、训练节点、设置等页面
     nav.ts / colors.ts / theme.ts
+docs/                公开设计文档
 tests/                服务、导出、插件和调度 API 测试
 ```
 
-## 运行
+## 文档
 
-Azure A100 上的 Qwen-Image LoRA 训练、监控和关机流程见
-[A100_TRAINING_RUNBOOK.md](A100_TRAINING_RUNBOOK.md)。
+- [系统设计](docs/DESIGN.md)
+- [UI 设计](docs/UI_DESIGN.md)
+- [视频抽帧工具设计](docs/FRAME_EXTRACTION_DESIGN.md)
+
+## 运行
 
 需两个终端：后端 API 与前端 dev server。
 
@@ -82,6 +86,21 @@ npm run dev
 ```
 
 浏览器打开 http://localhost:7778 。前端通过 Vite 代理将 `/api` 转发到后端 7777 端口。
+
+### Windows 桌面应用打包
+
+桌面版使用系统 WebView2 显示 React 界面，并在应用进程内启动仅监听随机回环端口的 FastAPI。应用数据保存在 `%LOCALAPPDATA%\LoraLoom\workspace`，首次启动创建空数据库，不会写入演示数据；关闭窗口后本地服务随之退出。
+
+```powershell
+.\scripts\build-desktop.ps1
+```
+
+构建产物位于 `dist\LoraLoom\LoraLoom.exe`。可在不打开窗口的情况下验证完整打包产物：
+
+```powershell
+$check = Start-Process .\dist\LoraLoom\LoraLoom.exe -ArgumentList "--health-check" -Wait -PassThru
+if ($check.ExitCode -ne 0) { throw "Desktop health check failed" }
+```
 
 ## ai-toolkit 节点调度
 

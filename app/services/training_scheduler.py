@@ -447,6 +447,11 @@ class TrainingScheduler:
             preset=str(options.get("preset") or "character"),
             trigger_word=str(options.get("trigger_word") or "").strip(),
             rank=int(options["rank"]) if options.get("rank") else None,
+            learning_rate=(
+                float(options["learning_rate"])
+                if options.get("learning_rate") is not None
+                else None
+            ),
             steps=int(options["steps"]) if options.get("steps") else None,
             steps_per_image=(
                 int(options["steps_per_image"])

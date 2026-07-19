@@ -56,6 +56,8 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "lr": 1e-4,
         "min_steps": 800,
         "max_steps": 4000,
+        "trigger_word": "ohwx",
+        "sample_prompts": ["ohwx, portrait photo", "ohwx, full body photo"],
     },
     "action": {
         "label": "动作 / 姿势",
@@ -64,6 +66,8 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "lr": 1e-4,
         "min_steps": 700,
         "max_steps": 3500,
+        "trigger_word": "ohwx_action",
+        "sample_prompts": ["ohwx_action, dynamic action pose", "ohwx_action, walking outdoors"],
     },
     "style": {
         "label": "风格（避免过拟合）",
@@ -72,6 +76,8 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "lr": 8e-5,
         "min_steps": 600,
         "max_steps": 2500,
+        "trigger_word": "ohwx_style",
+        "sample_prompts": ["ohwx_style, portrait", "ohwx_style, landscape"],
     },
     "general": {
         "label": "通用",
@@ -80,6 +86,8 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "lr": 1e-4,
         "min_steps": 600,
         "max_steps": 3000,
+        "trigger_word": "ohwx_subject",
+        "sample_prompts": ["ohwx_subject, studio photo", "ohwx_subject, outdoor photo"],
     },
 }
 
@@ -95,6 +103,7 @@ class ExportOptions:
     preset: str = "character"
     trigger_word: str = ""
     rank: int | None = None
+    learning_rate: float | None = None
     steps: int | None = None
     steps_per_image: int | None = None
     resolution: list[int] | None = None
@@ -136,7 +145,11 @@ def resolve_hyperparams(
     preset = TRAINING_PRESETS.get(opts.preset) or TRAINING_PRESETS["general"]
     model_profile = _model_profile(opts.base_model)
     rank = int(opts.rank) if opts.rank else int(preset["rank"])
-    lr = float(model_profile.get("lr", preset["lr"]))
+    lr = (
+        float(opts.learning_rate)
+        if opts.learning_rate is not None
+        else float(model_profile.get("lr", preset["lr"]))
+    )
     if opts.steps:
         steps = int(opts.steps)
     else:

@@ -8,6 +8,7 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Radio,
@@ -29,6 +30,7 @@ import {
   RobotOutlined,
   ExportOutlined,
   CloudUploadOutlined,
+  ScissorOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate, useParams } from "react-router-dom";
@@ -36,6 +38,7 @@ import dayjs from "dayjs";
 import { PageHeader } from "@/components/PageHeader";
 import { Thumbnail } from "@/components/Thumbnail";
 import { api } from "@/api/client";
+import { BatchCropModal } from "@/pages/ImagesPage";
 import type {
   AnnotateResult,
   AiToolkitNode,
@@ -73,10 +76,40 @@ const CHARACTER_ASPECTS: {
   forbiddenText: string;
 }[] = [
   {
+    key: "age",
+    label: "年龄阶段",
+    text: "apparent age group, such as child, young adult, middle-aged, or elderly",
+    forbiddenText: "age, age group, youth, adulthood, middle age, or elderly appearance",
+  },
+  {
     key: "gender",
     label: "性别",
     text: "the person's gender",
     forbiddenText: "gender or gendered words (for example man, woman, male, female, boy, girl, lady)",
+  },
+  {
+    key: "face",
+    label: "面部特征",
+    text: "facial features and face shape",
+    forbiddenText: "facial features, face shape, nose, lips, cheeks, jawline, or eyebrows",
+  },
+  {
+    key: "expression",
+    label: "表情",
+    text: "facial expression and visible emotion",
+    forbiddenText: "facial expression, smile, emotion, mood, or visible feeling",
+  },
+  {
+    key: "eyes",
+    label: "眼睛/视线",
+    text: "eye appearance, eye state, and gaze direction",
+    forbiddenText: "eyes, eye color, open or closed eyes, gaze, or looking direction",
+  },
+  {
+    key: "skin",
+    label: "肤色/肤质",
+    text: "visible skin tone and skin texture",
+    forbiddenText: "skin tone, complexion, skin color, or skin texture",
   },
   {
     key: "hair",
@@ -85,17 +118,41 @@ const CHARACTER_ASPECTS: {
     forbiddenText: "hair, hairstyle, hair length, or hair color",
   },
   {
+    key: "facial_hair",
+    label: "面部毛发",
+    text: "facial hair such as beard or mustache",
+    forbiddenText: "facial hair, beard, mustache, stubble, or sideburns",
+  },
+  {
+    key: "body",
+    label: "体型",
+    text: "visible body build and proportions",
+    forbiddenText: "body build, physique, body shape, height, weight, muscularity, or proportions",
+  },
+  {
     key: "clothing",
     label: "衣着/鞋袜",
     text: "clothing, outfit, and footwear",
     forbiddenText: "clothing or footwear, including garments, outfit colors or materials, tops, pants, dresses, shoes, socks, and bare feet",
   },
-  { key: "pose", label: "姿势", text: "body pose and posture", forbiddenText: "pose, posture, gesture, or body position" },
+  { key: "pose", label: "姿势/动作", text: "body pose, posture, and overall action", forbiddenText: "pose, posture, action, or body position" },
+  {
+    key: "hands",
+    label: "手部/手势",
+    text: "hand position, hand visibility, and gestures",
+    forbiddenText: "hands, fingers, hand position, or hand gesture",
+  },
   {
     key: "framing",
     label: "景别/裁切",
     text: "shot framing and crop, such as full-body, three-quarter, half-body, or close-up",
     forbiddenText: "shot framing, crop, camera distance, full-body, three-quarter, half-body, close-up, or which body parts are visible",
+  },
+  {
+    key: "camera",
+    label: "拍摄视角",
+    text: "camera angle and viewpoint, such as eye-level, high-angle, low-angle, front, side, or back view",
+    forbiddenText: "camera angle, viewpoint, eye-level, high-angle, low-angle, front view, side view, or back view",
   },
   {
     key: "background",
@@ -104,10 +161,34 @@ const CHARACTER_ASPECTS: {
     forbiddenText: "background, location, setting, environment, or surrounding objects",
   },
   {
+    key: "lighting",
+    label: "光线",
+    text: "lighting direction, softness, contrast, and visible light conditions",
+    forbiddenText: "lighting, illumination, shadows, highlights, backlight, soft light, or hard light",
+  },
+  {
+    key: "style",
+    label: "画面风格/媒介",
+    text: "visual style and medium, such as photo, illustration, anime, painting, or 3D render",
+    forbiddenText: "visual style, medium, photo, illustration, anime, painting, drawing, or 3D render",
+  },
+  {
+    key: "color",
+    label: "色彩",
+    text: "overall color palette, saturation, and color treatment",
+    forbiddenText: "color palette, saturation, monochrome, warm colors, cool colors, or color grading",
+  },
+  {
     key: "accessories",
     label: "饰品",
     text: "accessories such as jewelry, glasses, hats",
     forbiddenText: "accessories, jewelry, glasses, hats, or earrings",
+  },
+  {
+    key: "quality",
+    label: "图像质量",
+    text: "visible image quality such as sharpness, blur, noise, compression artifacts, or low resolution",
+    forbiddenText: "image quality, sharpness, blur, noise, grain, compression artifacts, or resolution",
   },
 ];
 
@@ -395,6 +476,7 @@ export function DatasetDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [annotateOpen, setAnnotateOpen] = useState(false);
+  const [batchCropOpen, setBatchCropOpen] = useState(false);
   const [exportMode, setExportMode] = useState<"export" | "dispatch" | null>(null);
 
   const loadDataset = useCallback(async () => {
@@ -481,6 +563,18 @@ export function DatasetDetailPage() {
         extra={
           dataset ? (
             <Space>
+              {dataset.type === "image" && (
+                <Button
+                  icon={<ScissorOutlined />}
+                  onClick={() => setBatchCropOpen(true)}
+                  disabled={items.length === 0}
+                >
+                  压缩并裁剪
+                  {selectedRowKeys.length > 0
+                    ? `（选中 ${selectedRowKeys.length}）`
+                    : "（全部）"}
+                </Button>
+              )}
               {dataset.type === "image" && (
                 <Button
                   icon={<RobotOutlined />}
@@ -652,6 +746,21 @@ export function DatasetDetailPage() {
       )}
 
       {dataset && dataset.type === "image" && (
+        <BatchCropModal
+          open={batchCropOpen}
+          images={(items as ImageModel[]).filter(
+            (image) =>
+              selectedRowKeys.length === 0 || selectedRowKeys.includes(image.id),
+          )}
+          onClose={() => setBatchCropOpen(false)}
+          onDone={async () => {
+            setSelectedRowKeys([]);
+            await loadItems();
+          }}
+        />
+      )}
+
+      {dataset && dataset.type === "image" && (
         <ExportModal
           open={exportMode !== null}
           mode={exportMode ?? "export"}
@@ -761,13 +870,7 @@ function AnnotateModal({
     ANNOTATION_TEMPLATES[0].key,
   );
   const [aspects, setAspects] = useState<string[]>([
-    "gender",
-    "hair",
-    "clothing",
-    "pose",
-    "framing",
-    "background",
-    "accessories",
+    ...CHARACTER_ASPECTS.map((aspect) => aspect.key),
   ]);
   const [triggerWord, setTriggerWord] = useState("");
   const [prependTrigger, setPrependTrigger] = useState(true);
@@ -907,7 +1010,7 @@ function AnnotateModal({
       title="AI 标注"
       open={open}
       onCancel={running ? undefined : onClose}
-      width={720}
+      width={820}
       destroyOnClose
       footer={[
         <Button key="cancel" onClick={onClose} disabled={running}>
@@ -938,11 +1041,28 @@ function AnnotateModal({
 
         {template.supportsAspects && (
           <Form.Item
-            label="需要描述的维度"
+            label={
+              <Space size={4}>
+                <span>需要描述的维度（{aspects.length}/{CHARACTER_ASPECTS.length}）</span>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() =>
+                    setAspects(CHARACTER_ASPECTS.map((aspect) => aspect.key))
+                  }
+                >
+                  全选
+                </Button>
+                <Button type="link" size="small" onClick={() => setAspects([])}>
+                  清空
+                </Button>
+              </Space>
+            }
             style={{ marginBottom: 12 }}
             tooltip="勾选=描述该维度；取消勾选=在提示词中强制要求绝对不描述、不提及该维度。"
           >
             <Checkbox.Group
+              className="annotation-aspect-grid"
               value={aspects}
               onChange={(v) => setAspects(v as string[])}
               options={CHARACTER_ASPECTS.map((a) => ({
@@ -1109,11 +1229,11 @@ function ExportModal({
   const [scope, setScope] = useState<"selected" | "all">("all");
   const [onlyCaptioned, setOnlyCaptioned] = useState(true);
   const [resolution, setResolution] = useState("auto");
-  const [rank, setRank] = useState<number | undefined>(undefined);
-  const [stepsPerImage, setStepsPerImage] = useState<number | undefined>(
-    undefined,
-  );
+  const [rank, setRank] = useState(32);
+  const [trainingSteps, setTrainingSteps] = useState(800);
+  const [learningRate, setLearningRate] = useState(0.0001);
   const [triggerWord, setTriggerWord] = useState("");
+  const [samplePrompts, setSamplePrompts] = useState("");
   const [nodes, setNodes] = useState<AiToolkitNode[]>([]);
   const [nodeId, setNodeId] = useState<string | undefined>();
   const [running, setRunning] = useState(false);
@@ -1156,6 +1276,42 @@ function ExportModal({
   ).length;
   const exportCount = onlyCaptioned ? captionedCount : scopeItems.length;
 
+  const applyPresetDefaults = (presetValue: string, count = exportCount) => {
+    const selectedPreset = presets.find((item) => item.value === presetValue);
+    if (!selectedPreset) return;
+    setPreset(presetValue);
+    setRank(selectedPreset.rank);
+    setLearningRate(selectedPreset.learning_rate);
+    setTrainingSteps(
+      Math.max(
+        selectedPreset.min_steps,
+        Math.min(selectedPreset.max_steps, Math.max(count, 1) * selectedPreset.steps_per_image),
+      ),
+    );
+    setTriggerWord(selectedPreset.trigger_word);
+    setSamplePrompts(selectedPreset.sample_prompts.join("\n"));
+  };
+
+  useEffect(() => {
+    if (!open || !currentPreset) return;
+    setTrainingSteps(
+      Math.max(
+        currentPreset.min_steps,
+        Math.min(
+          currentPreset.max_steps,
+          Math.max(exportCount, 1) * currentPreset.steps_per_image,
+        ),
+      ),
+    );
+  }, [open, exportCount, currentPreset]);
+
+  useEffect(() => {
+    if (!open || presets.length === 0) return;
+    applyPresetDefaults(preset);
+    // 仅在选项首次加载时初始化整组推荐值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, presets]);
+
   const handleExport = async () => {
     if (exportCount === 0) {
       message.warning("没有可导出的图片（可能都缺少 Caption）");
@@ -1172,7 +1328,12 @@ function ExportModal({
         preset,
         trigger_word: triggerWord,
         rank,
-        steps_per_image: stepsPerImage,
+        learning_rate: learningRate,
+        steps: trainingSteps,
+        sample_prompts: samplePrompts
+          .split("\n")
+          .map((value) => value.trim())
+          .filter(Boolean),
         resolution:
           resolution === "auto"
             ? undefined
@@ -1257,21 +1418,11 @@ function ExportModal({
         </div>
 
         <div>
-          <Typography.Text strong>触发词</Typography.Text>
-          <Input
-            style={{ marginTop: 6 }}
-            value={triggerWord}
-            onChange={(event) => setTriggerWord(event.target.value)}
-            placeholder="例如 zxqv；会写入任务配置，Caption 应已包含该词"
-          />
-        </div>
-
-        <div>
           <Typography.Text strong>训练预设</Typography.Text>
           <Radio.Group
             style={{ display: "block", marginTop: 6 }}
             value={preset}
-            onChange={(e) => setPreset(e.target.value)}
+            onChange={(e) => applyPresetDefaults(e.target.value)}
           >
             <Space direction="vertical">
               {presets.map((p) => (
@@ -1286,6 +1437,67 @@ function ExportModal({
           </Radio.Group>
         </div>
 
+        <Divider orientation="left" plain style={{ margin: "4px 0" }}>
+          参数设置
+        </Divider>
+
+        <Space size="middle" wrap>
+          <div>
+            <Typography.Text strong>训练步数 Training Steps</Typography.Text>
+            <InputNumber
+              min={1}
+              max={1000000}
+              step={100}
+              value={trainingSteps}
+              style={{ width: 190, marginTop: 6, display: "block" }}
+              onChange={(value) => setTrainingSteps(value ?? 800)}
+            />
+          </div>
+          <div>
+            <Typography.Text strong>学习率 Learning Rate</Typography.Text>
+            <InputNumber
+              min="0.000001"
+              max="1"
+              step="0.00001"
+              stringMode
+              value={String(learningRate)}
+              style={{ width: 190, marginTop: 6, display: "block" }}
+              onChange={(value) => setLearningRate(Number(value ?? 0.0001))}
+            />
+          </div>
+          <div>
+            <Typography.Text strong>LoRA 阶数 LoRA Rank</Typography.Text>
+            <InputNumber
+              min={1}
+              max={512}
+              step={8}
+              value={rank}
+              style={{ width: 190, marginTop: 6, display: "block" }}
+              onChange={(value) => setRank(value ?? 16)}
+            />
+          </div>
+        </Space>
+
+        <div>
+          <Typography.Text strong>模型触发词</Typography.Text>
+          <Input
+            style={{ marginTop: 6 }}
+            value={triggerWord}
+            onChange={(event) => setTriggerWord(event.target.value)}
+            placeholder="会写入训练配置；Caption 应包含该词"
+          />
+        </div>
+
+        <div>
+          <Typography.Text strong>测试集（测试提示词，每行一条）</Typography.Text>
+          <Input.TextArea
+            rows={3}
+            style={{ marginTop: 6 }}
+            value={samplePrompts}
+            onChange={(event) => setSamplePrompts(event.target.value)}
+          />
+        </div>
+
         <Space size="large" wrap>
           <div>
             <Typography.Text strong>分辨率分桶</Typography.Text>
@@ -1294,34 +1506,6 @@ function ExportModal({
               value={resolution}
               onChange={setResolution}
               options={RESOLUTION_OPTIONS}
-            />
-          </div>
-          <div>
-            <Typography.Text strong>rank 覆盖</Typography.Text>
-            <Input
-              style={{ width: 140, marginTop: 6, display: "block" }}
-              type="number"
-              placeholder={currentPreset ? String(currentPreset.rank) : "预设"}
-              value={rank ?? ""}
-              onChange={(e) =>
-                setRank(e.target.value ? Number(e.target.value) : undefined)
-              }
-            />
-          </div>
-          <div>
-            <Typography.Text strong>每图步数覆盖</Typography.Text>
-            <Input
-              style={{ width: 140, marginTop: 6, display: "block" }}
-              type="number"
-              placeholder={
-                currentPreset ? String(currentPreset.steps_per_image) : "预设"
-              }
-              value={stepsPerImage ?? ""}
-              onChange={(e) =>
-                setStepsPerImage(
-                  e.target.value ? Number(e.target.value) : undefined,
-                )
-              }
             />
           </div>
         </Space>

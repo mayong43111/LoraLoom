@@ -33,7 +33,7 @@ from app.domain.enums import (
 
 @dataclass(slots=True)
 class ImportBatch:
-    """导入批次。对应 DESIGN.md 6.1。"""
+    """导入批次。对应 docs/DESIGN.md 6.1。"""
 
     id: str
     name: str
@@ -48,7 +48,7 @@ class ImportBatch:
 
 @dataclass(slots=True)
 class Asset:
-    """原始素材（视频或图片）。对应 DESIGN.md 6.2。"""
+    """原始素材（视频或图片）。对应 docs/DESIGN.md 6.2。"""
 
     id: str
     import_batch_id: str
@@ -86,7 +86,7 @@ class ImageGroup:
 
 @dataclass(slots=True)
 class Image:
-    """数据集核心对象。对应 DESIGN.md 6.3。"""
+    """数据集核心对象。对应 docs/DESIGN.md 6.3。"""
 
     id: str
     image_path: str
@@ -117,7 +117,7 @@ class Image:
 
 @dataclass(slots=True)
 class Face:
-    """人脸检测结果。对应 DESIGN.md 6.4。"""
+    """人脸检测结果。对应 docs/DESIGN.md 6.4。"""
 
     id: str
     image_id: str
@@ -129,7 +129,7 @@ class Face:
 
 @dataclass(slots=True)
 class PersonCluster:
-    """人物聚类。对应 DESIGN.md 6.5。"""
+    """人物聚类。对应 docs/DESIGN.md 6.5。"""
 
     id: str
     display_name: str
@@ -146,7 +146,7 @@ class PersonCluster:
 
 @dataclass(slots=True)
 class Annotation:
-    """人工/自动标签。对应 DESIGN.md 6.6。"""
+    """人工/自动标签。对应 docs/DESIGN.md 6.6。"""
 
     id: str
     image_id: str
@@ -161,7 +161,7 @@ class Annotation:
 
 @dataclass(slots=True)
 class Caption:
-    """训练文本。对应 DESIGN.md 6.7。"""
+    """训练文本。对应 docs/DESIGN.md 6.7。"""
 
     id: str
     image_id: str
@@ -193,7 +193,7 @@ class SelectionRule:
 
 @dataclass(slots=True)
 class SelectionItem:
-    """组包中的单张图片。对应 DESIGN.md 6.9。"""
+    """组包中的单张图片。对应 docs/DESIGN.md 6.9。"""
 
     id: str
     selection_id: str
@@ -205,7 +205,7 @@ class SelectionItem:
 
 @dataclass(slots=True)
 class Selection:
-    """组包 Selection。对应 DESIGN.md 6.8。"""
+    """组包 Selection。对应 docs/DESIGN.md 6.8。"""
 
     id: str
     name: str
@@ -224,7 +224,7 @@ class Selection:
 
 @dataclass(slots=True)
 class DownloadTask:
-    """下载任务。对应 UI_DESIGN.md 4.4。"""
+    """下载任务。对应 docs/UI_DESIGN.md 4.4。"""
 
     id: str
     title: str

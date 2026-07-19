@@ -97,6 +97,11 @@ export interface ExportPreset {
   label: string;
   rank: number;
   steps_per_image: number;
+  learning_rate: number;
+  min_steps: number;
+  max_steps: number;
+  trigger_word: string;
+  sample_prompts: string[];
 }
 
 export interface ExportOptionsResponse {
@@ -110,6 +115,7 @@ export interface ExportPayload {
   preset?: string;
   trigger_word?: string;
   rank?: number;
+  learning_rate?: number;
   steps?: number;
   steps_per_image?: number;
   resolution?: number[];

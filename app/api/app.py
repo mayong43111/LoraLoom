@@ -72,12 +72,40 @@ app.add_middleware(
 )
 
 _CAPTION_FORBIDDEN_PATTERNS = {
+    "age": re.compile(
+        r"\b(?:age|aged|young|youthful|teen(?:ager)?|adult|middle[- ]aged|elderly|old(?:er)?|child|kid)\b|年龄|年纪|年轻|青年|少年|儿童|中年|老年|年长",
+        re.IGNORECASE,
+    ),
     "gender": re.compile(
         r"\b(?:man|woman|male|female|boy|girl|lady|gentleman)\b|男人|女人|男性|女性|男孩|女孩|女士|先生",
         re.IGNORECASE,
     ),
+    "face": re.compile(
+        r"\b(?:facial features?|face shape|round face|oval face|nose|lips?|mouth|cheeks?|jawline|eyebrows?)\b|面部特征|脸型|圆脸|鹅蛋脸|鼻子|嘴唇|嘴巴|脸颊|下颌|眉毛",
+        re.IGNORECASE,
+    ),
+    "expression": re.compile(
+        r"\b(?:expression|smil(?:e|ing)|grin(?:ning)?|frown(?:ing)?|laugh(?:ing)?|serious|neutral expression|happy|sad|angry|surprised)\b|表情|微笑|笑容|大笑|皱眉|严肃|开心|悲伤|生气|惊讶",
+        re.IGNORECASE,
+    ),
+    "eyes": re.compile(
+        r"\b(?:eyes?|eye color|gaze|looking|staring|glancing|eyes? open|eyes? closed)\b|眼睛|眼眸|瞳孔|视线|凝视|看向|闭眼|睁眼",
+        re.IGNORECASE,
+    ),
+    "skin": re.compile(
+        r"\b(?:skin|skin tone|complexion|pale|fair[- ]skinned|dark[- ]skinned|tan(?:ned)?|freckles?)\b|皮肤|肤色|肤质|白皙|黝黑|小麦色|雀斑",
+        re.IGNORECASE,
+    ),
     "hair": re.compile(
-        r"\b(?:hair|hairstyle|haired|bangs|ponytail|braids?)\b|头发|发型|刘海|马尾|辫子",
+        r"\b(?:hair|hairstyle|haired|bangs|ponytail|braids?|blonde|blond|brunette|raven-haired|redhead|ginger-haired|gray-haired|grey-haired)\b|头发|发型|发色|金发|黑发|棕发|红发|灰发|刘海|马尾|辫子",
+        re.IGNORECASE,
+    ),
+    "facial_hair": re.compile(
+        r"\b(?:facial hair|beard(?:ed)?|mustache|moustache|stubble|goatee|sideburns?)\b|面部毛发|胡须|胡子|络腮胡|八字胡",
+        re.IGNORECASE,
+    ),
+    "body": re.compile(
+        r"\b(?:body build|physique|body shape|slim|skinny|thin|athletic|muscular|stocky|curvy|petite|tall|short stature|body proportions?)\b|体型|身材|体格|苗条|瘦削|健壮|肌肉|魁梧|娇小|高挑|身高|比例",
         re.IGNORECASE,
     ),
     "clothing": re.compile(
@@ -88,16 +116,40 @@ _CAPTION_FORBIDDEN_PATTERNS = {
         r"\b(?:pose|posture|standing|sitting|seated|lying|kneeling|squatting|walking|running|jumping|gesture|arms? raised|hands? on hips)\b|姿势|站立|坐着|坐姿|躺着|跪着|下蹲|行走|跑步|跳跃|手势",
         re.IGNORECASE,
     ),
+    "hands": re.compile(
+        r"\b(?:hands?|fingers?|thumbs?|palms?|hand gesture|hand position|peace sign|pointing|waving|fist)\b|手部|手掌|手指|拇指|手势|比耶|指向|挥手|握拳",
+        re.IGNORECASE,
+    ),
     "framing": re.compile(
         r"\b(?:full[- ]body|three[- ]quarter|half[- ]body|upper[- ]body|close[- ]up|headshot|portrait crop|wide shot|medium shot)\b|全身|四分之三身|半身|上半身|近景|特写|头像|远景|中景",
         re.IGNORECASE,
     ),
+    "camera": re.compile(
+        r"\b(?:camera angle|viewpoint|eye[- ]level|high[- ]angle|low[- ]angle|overhead|bird'?s[- ]eye|worm'?s[- ]eye|front view|side view|back view|rear view|profile view)\b|拍摄视角|机位|平视|俯拍|仰拍|鸟瞰|正面视角|侧面视角|背面视角",
+        re.IGNORECASE,
+    ),
     "background": re.compile(
-        r"\b(?:background|setting|environment|indoors?|outdoors?|room|gym|studio|wall|floor|curtain|door|window|furniture)\b|背景|环境|室内|室外|房间|健身房|墙|地板|窗帘|门|窗|家具",
+        r"\b(?:background|setting|environment|indoors?|outdoors?|room|gym|studio|office|kitchen|bathroom|bedroom|street|road|park|garden|forest|beach|mountains?|desert|wall|floor|curtain|door|window|furniture)\b|背景|环境|室内|室外|房间|健身房|办公室|厨房|浴室|卧室|街道|公园|花园|森林|海滩|山地|沙漠|墙|地板|窗帘|门|窗|家具",
+        re.IGNORECASE,
+    ),
+    "lighting": re.compile(
+        r"\b(?:lighting|illumination|lit|backlit|backlight|rim light|soft light|hard light|natural light|studio light|shadows?|highlights?)\b|光线|灯光|照明|逆光|轮廓光|柔光|硬光|自然光|阴影|高光",
+        re.IGNORECASE,
+    ),
+    "style": re.compile(
+        r"\b(?:visual style|art style|photograph(?:y|ic)?|photo|illustration|illustrated|anime|manga|painting|painted|drawing|sketch|3d render|cinematic)\b|画面风格|艺术风格|照片|摄影|插画|动漫|漫画|绘画|素描|3D渲染|电影感",
+        re.IGNORECASE,
+    ),
+    "color": re.compile(
+        r"\b(?:color palette|colour palette|saturation|saturated|desaturated|monochrome|black and white|warm colors?|cool colors?|color grading|vibrant colors?|muted colors?)\b|色彩|配色|饱和度|单色|黑白|暖色|冷色|调色|鲜艳|低饱和",
         re.IGNORECASE,
     ),
     "accessories": re.compile(
         r"\b(?:accessory|accessories|jewelry|glasses|eyeglasses|spectacles|hat|cap|earrings?|necklace|bracelet|watch)\b|饰品|配饰|首饰|眼镜|帽子|耳环|项链|手链|手表",
+        re.IGNORECASE,
+    ),
+    "quality": re.compile(
+        r"\b(?:image quality|high quality|low quality|sharp(?:ness)?|blurr?y|blur|noise|noisy|grain(?:y)?|compression artifacts?|pixelated|low resolution|high resolution)\b|图像质量|画质|清晰|模糊|噪点|颗粒|压缩痕迹|像素化|低分辨率|高分辨率",
         re.IGNORECASE,
     ),
 }
@@ -1410,6 +1462,11 @@ def get_export_options() -> dict[str, Any]:
             "label": cfg["label"],
             "rank": cfg["rank"],
             "steps_per_image": cfg["steps_per_image"],
+            "learning_rate": cfg["lr"],
+            "min_steps": cfg["min_steps"],
+            "max_steps": cfg["max_steps"],
+            "trigger_word": cfg["trigger_word"],
+            "sample_prompts": cfg["sample_prompts"],
         }
         for key, cfg in export_service.TRAINING_PRESETS.items()
     ]
@@ -1541,6 +1598,7 @@ def export_dataset(
           "preset": "character" | "action" | "style" | "general",
           "trigger_word": "...",
           "rank": 32,
+          "learning_rate": 0.0001,
           "steps": 2000,            # 指定则优先，否则按张数×每图步数
           "steps_per_image": 100,
           "resolution": [512, 768, 1024],
@@ -1580,6 +1638,11 @@ def export_dataset(
         preset=str(payload.get("preset") or "character"),
         trigger_word=str(payload.get("trigger_word") or "").strip(),
         rank=int(payload["rank"]) if payload.get("rank") else None,
+        learning_rate=(
+            float(payload["learning_rate"])
+            if payload.get("learning_rate") is not None
+            else None
+        ),
         steps=int(payload["steps"]) if payload.get("steps") else None,
         steps_per_image=(
             int(payload["steps_per_image"])

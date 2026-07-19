@@ -60,14 +60,18 @@ T = TypeVar("T")
 class SqliteDatasetService(DatasetService):
     """使用 SQLite 持久化的服务实现。"""
 
-    def __init__(self, db_path: str = "workspace/dataset.sqlite") -> None:
+    def __init__(
+        self,
+        db_path: str = "workspace/dataset.sqlite",
+        seed_data: MockDataset | None = None,
+    ) -> None:
         self.db_path = str(Path(db_path).resolve())
         self._conn = db.connect(db_path)
         # 连接允许跨线程使用（FastAPI 线程池），用可重入锁串行化访问。
         self._lock = threading.RLock()
         db.init_db(self._conn)
-        if db.is_empty(self._conn):
-            self._seed(MockDataset())
+        if seed_data is not None and db.is_empty(self._conn):
+            self._seed(seed_data)
 
     # -- 底层访问（加锁） ---------------------------------------------------
     def _fetchall(

@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Windows desktop shell and packaging toolchain.
+pywebview==6.1
+pyinstaller==6.16.0
