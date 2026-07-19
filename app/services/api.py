@@ -313,7 +313,11 @@ class DatasetService(ABC):
         raise NotImplementedError
 
     def create_dataset(
-        self, name: str, type: DatasetType, description: str = ""
+        self,
+        name: str,
+        type: DatasetType,
+        description: str = "",
+        base_model: str = "Qwen/Qwen-Image-2512",
     ) -> Dataset:
         """创建数据集并设定类型（图片/视频）。"""
         raise NotImplementedError

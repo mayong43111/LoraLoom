@@ -326,5 +326,6 @@ class Dataset:
     name: str
     type: DatasetType
     description: str = ""
+    base_model: str = "Qwen/Qwen-Image-2512"
     item_count: int = 0
     created_at: datetime = field(default_factory=datetime.now)

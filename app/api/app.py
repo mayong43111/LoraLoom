@@ -1228,13 +1228,18 @@ def create_dataset(
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="数据集名称不能为空")
+    base_model = (payload.get("base_model") or "").strip()
+    if not base_model:
+        raise HTTPException(status_code=400, detail="训练底模不能为空")
     try:
         ds_type = DatasetType(payload.get("type"))
     except ValueError as exc:
         raise HTTPException(
             status_code=400, detail=f"非法的数据集类型: {payload.get('type')}"
         ) from exc
-    ds = service.create_dataset(name, ds_type, payload.get("description", ""))
+    ds = service.create_dataset(
+        name, ds_type, payload.get("description", ""), base_model
+    )
     return to_jsonable(ds)
 
 

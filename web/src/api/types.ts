@@ -46,6 +46,7 @@ export interface Dataset {
   name: string;
   type: DatasetType;
   description: string;
+  base_model: string;
   item_count: number;
   created_at: string;
 }

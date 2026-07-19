@@ -893,16 +893,24 @@ class SqliteDatasetService(DatasetService):
         return self._dataset_from_row(row)
 
     def create_dataset(
-        self, name: str, type: DatasetType, description: str = ""
+        self,
+        name: str,
+        type: DatasetType,
+        description: str = "",
+        base_model: str = "Qwen/Qwen-Image-2512",
     ) -> Dataset:
         name = (name or "").strip()
         if not name:
             raise ServiceError("数据集名称不能为空")
+        base_model = (base_model or "").strip()
+        if not base_model:
+            raise ServiceError("训练底模不能为空")
         dataset = Dataset(
             id=f"ds-{uuid4().hex[:12]}",
             name=name,
             type=type,
             description=description,
+            base_model=base_model,
         )
         self._write(
             "INSERT INTO datasets (id, type, name, created_at, doc) "

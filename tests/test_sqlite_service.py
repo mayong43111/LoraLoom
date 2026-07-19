@@ -317,4 +317,14 @@ def test_delete_image_group_can_delete_members_without_deleting_shared_copy() ->
     assert again.get_dataset(dataset.id).item_count == 1
 
 
+def test_dataset_persists_base_model_choice() -> None:
+    service, path = _service()
+    dataset = service.create_dataset(
+        "训练集", DatasetType.IMAGE, base_model="krea/Krea-2-Raw"
+    )
+
+    reopened = SqliteDatasetService(path)
+    assert reopened.get_dataset(dataset.id).base_model == "krea/Krea-2-Raw"
+
+
 

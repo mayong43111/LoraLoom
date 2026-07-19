@@ -242,6 +242,7 @@ export const api = {
     name: string;
     type: DatasetType;
     description?: string;
+    base_model: string;
   }) =>
     request<Dataset>("/datasets", {
       method: "POST",

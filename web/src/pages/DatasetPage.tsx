@@ -55,6 +55,8 @@ const TYPE_LABEL: Record<DatasetType, string> = {
   video: "视频",
 };
 
+const DEFAULT_BASE_MODEL = "Qwen/Qwen-Image-2512";
+
 const UNGROUPED_NAME = "未分组";
 
 function isImage(item: ImageModel | Video): item is ImageModel {
@@ -297,9 +299,11 @@ export function DatasetListPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [baseModels, setBaseModels] = useState<ExportBaseModel[]>([]);
   const [form] = Form.useForm<{
     name: string;
     type: DatasetType;
+    base_model: string;
     description: string;
   }>();
 
@@ -318,12 +322,25 @@ export function DatasetListPage() {
     void loadDatasets();
   }, [loadDatasets]);
 
+  useEffect(() => {
+    if (!createOpen || baseModels.length > 0) return;
+    void api
+      .getExportOptions()
+      .then((res) => setBaseModels(res.base_models))
+      .catch(() => {
+        setBaseModels([
+          { value: DEFAULT_BASE_MODEL, label: "Qwen-Image-2512（推荐）" },
+        ]);
+      });
+  }, [createOpen, baseModels.length]);
+
   const handleCreate = async () => {
     const values = await form.validateFields();
     try {
       const ds = await api.createDataset({
         name: values.name.trim(),
         type: values.type,
+        base_model: values.base_model,
         description: values.description ?? "",
       });
       message.success("数据集已创建");
@@ -368,6 +385,13 @@ export function DatasetListPage() {
       key: "count",
       width: 90,
       render: (_, ds) => `${ds.item_count} 项`,
+    },
+    {
+      title: "训练底模",
+      key: "base_model",
+      width: 180,
+      ellipsis: true,
+      render: (_, ds) => ds.base_model || DEFAULT_BASE_MODEL,
     },
     {
       title: "描述",
@@ -440,7 +464,11 @@ export function DatasetListPage() {
         cancelText="取消"
         destroyOnClose
       >
-        <Form form={form} layout="vertical" initialValues={{ type: "image" }}>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ type: "image", base_model: DEFAULT_BASE_MODEL }}
+        >
           <Form.Item
             name="name"
             label="名称"
@@ -453,6 +481,21 @@ export function DatasetListPage() {
               <Radio.Button value="image">图片</Radio.Button>
               <Radio.Button value="video">视频</Radio.Button>
             </Radio.Group>
+          </Form.Item>
+          <Form.Item
+            name="base_model"
+            label="训练底模"
+            rules={[{ required: true, message: "请选择要训练的底模" }]}
+          >
+            <Select
+              showSearch
+              popupMatchSelectWidth={false}
+              placeholder="选择这个数据集将用于训练的底模"
+              options={baseModels.map((model) => ({
+                label: model.label,
+                value: model.value,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={3} placeholder="可选" />
@@ -765,6 +808,7 @@ export function DatasetDetailPage() {
           open={exportMode !== null}
           mode={exportMode ?? "export"}
           datasetId={id}
+          datasetBaseModel={dataset.base_model || DEFAULT_BASE_MODEL}
           items={items as ImageModel[]}
           selectedIds={selectedRowKeys}
           onClose={() => setExportMode(null)}
@@ -1211,6 +1255,7 @@ function ExportModal({
   open,
   mode,
   datasetId,
+  datasetBaseModel,
   items,
   selectedIds,
   onClose,
@@ -1218,13 +1263,14 @@ function ExportModal({
   open: boolean;
   mode: "export" | "dispatch";
   datasetId: string;
+  datasetBaseModel: string;
   items: ImageModel[];
   selectedIds: string[];
   onClose: () => void;
 }) {
   const [baseModels, setBaseModels] = useState<ExportBaseModel[]>([]);
   const [presets, setPresets] = useState<ExportPreset[]>([]);
-  const [baseModel, setBaseModel] = useState("Qwen/Qwen-Image-2512");
+  const [baseModel, setBaseModel] = useState(datasetBaseModel || DEFAULT_BASE_MODEL);
   const [preset, setPreset] = useState("character");
   const [scope, setScope] = useState<"selected" | "all">("all");
   const [onlyCaptioned, setOnlyCaptioned] = useState(true);
@@ -1240,6 +1286,7 @@ function ExportModal({
 
   useEffect(() => {
     if (!open) return;
+    setBaseModel(datasetBaseModel || DEFAULT_BASE_MODEL);
     setScope(selectedIds.length > 0 ? "selected" : "all");
     void api
       .getExportOptions()
@@ -1264,7 +1311,7 @@ function ExportModal({
         })
         .catch((err) => message.error(`加载训练节点失败：${err.message}`));
     }
-  }, [open, mode, selectedIds.length]);
+  }, [open, mode, selectedIds.length, datasetBaseModel]);
 
   const currentPreset = presets.find((p) => p.value === preset);
   const scopeItems =
