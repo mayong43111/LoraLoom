@@ -246,6 +246,13 @@ export interface ImageCropResult {
   output_path: string;
 }
 
+export interface BatchImageCropResult {
+  target_width: number;
+  target_height: number;
+  completed: ImageModel[];
+  failed: Array<{ image_id: string; error: string }>;
+}
+
 export interface ImageUpscaleResult {
   image: ImageModel;
   previous_path: string;

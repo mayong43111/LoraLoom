@@ -27,6 +27,7 @@ import type {
   ImageFilterParams,
   ImageGroup,
   ImageModel,
+  BatchImageCropResult,
   ImageCropResult,
   ImageCropSuggestion,
   ImageUpscaleResult,
@@ -111,6 +112,19 @@ export const api = {
     request<ImageCropResult>(`/images/${imageId}/crop`, {
       method: "POST",
       body: JSON.stringify(crop),
+    }),
+  batchCropImages: (
+    imageIds: string[],
+    targetWidth: number,
+    targetHeight: number,
+  ) =>
+    request<BatchImageCropResult>("/images/batch-crop", {
+      method: "POST",
+      body: JSON.stringify({
+        image_ids: imageIds,
+        target_width: targetWidth,
+        target_height: targetHeight,
+      }),
     }),
   upscaleImage: (imageId: string, targetShortSide: number) =>
     request<ImageUpscaleResult>(`/images/${imageId}/upscale`, {

@@ -10,7 +10,7 @@
  * 独立的「工具集合」。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   App,
   Alert,
@@ -68,6 +68,16 @@ import "react-image-crop/dist/ReactCrop.css";
 
 const UNGROUPED_NAME = "未分组";
 const ROOT_VALUE = "__root__";
+
+const CROP_SIZE_PRESETS = [
+  { label: "512 × 512 · 1:1 方图", value: "512x512", width: 512, height: 512 },
+  { label: "768 × 768 · 1:1 方图", value: "768x768", width: 768, height: 768 },
+  { label: "1024 × 1024 · 1:1 方图", value: "1024x1024", width: 1024, height: 1024 },
+  { label: "768 × 1024 · 3:4 竖图", value: "768x1024", width: 768, height: 1024 },
+  { label: "1024 × 768 · 4:3 横图", value: "1024x768", width: 1024, height: 768 },
+  { label: "1024 × 1536 · 2:3 竖图", value: "1024x1536", width: 1024, height: 1536 },
+  { label: "1536 × 1024 · 3:2 横图", value: "1536x1024", width: 1536, height: 1024 },
+];
 
 // -- 图片详情（仅属性；硬指标只读） -----------------------------------------
 function ImageDetail({
@@ -293,6 +303,275 @@ function ImageDetail({
         </Descriptions.Item>
       </Descriptions>
     </Space>
+  );
+}
+
+function BatchCropModal({
+  open,
+  images,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  images: ImageModel[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+  const [preset, setPreset] = useState("1024x1024");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewErrors, setPreviewErrors] = useState<Set<string>>(() => new Set());
+  const targetWidth = Form.useWatch("target_width", form) ?? 1024;
+  const targetHeight = Form.useWatch("target_height", form) ?? 1024;
+
+  useEffect(() => {
+    setPreviewErrors(new Set());
+  }, [previewOpen, targetWidth, targetHeight]);
+
+  const applyPreset = (value: string) => {
+    setPreset(value);
+    const selectedPreset = CROP_SIZE_PRESETS.find((item) => item.value === value);
+    if (selectedPreset) {
+      form.setFieldsValue({
+        target_width: selectedPreset.width,
+        target_height: selectedPreset.height,
+      });
+    }
+  };
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    setSubmitting(true);
+    try {
+      const result = await api.batchCropImages(
+        images.map((image) => image.id),
+        values.target_width,
+        values.target_height,
+      );
+      if (result.failed.length) {
+        message.warning(
+          `已裁剪 ${result.completed.length} 张，${result.failed.length} 张失败`,
+        );
+      } else {
+        message.success(
+          `已将 ${result.completed.length} 张图片统一为 ${result.target_width}×${result.target_height}`,
+        );
+      }
+      onDone();
+      onClose();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "批量裁剪失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <Modal
+        title={`压缩并裁剪 ${images.length} 张图片`}
+        open={open}
+        okText="开始处理"
+        cancelText="取消"
+        confirmLoading={submitting}
+        onOk={() => void submit()}
+        onCancel={onClose}
+        destroyOnHidden
+        width={880}
+      >
+      <Form
+        form={form}
+        initialValues={{ target_width: 1024, target_height: 1024 }}
+        onValuesChange={() => setPreset("")}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto minmax(180px, 1fr) auto auto",
+            alignItems: "center",
+            gap: 12,
+            padding: "12px 14px",
+            marginBottom: 12,
+            overflowX: "auto",
+            background: "rgba(255,255,255,0.04)",
+            borderBottom: "1px solid rgba(255,255,255,0.12)",
+          }}
+        >
+          <Typography.Text strong>裁剪设置</Typography.Text>
+          <Select
+            aria-label="常用尺寸（可自定义）"
+            value={preset}
+            style={{ width: "100%", minWidth: 180 }}
+            placeholder="常用尺寸"
+            options={CROP_SIZE_PRESETS.map((item) => ({
+              label: item.label,
+              value: item.value,
+            }))}
+            onChange={applyPreset}
+          />
+          <Space size={6}>
+            <Typography.Text type="secondary">宽</Typography.Text>
+            <Form.Item
+              noStyle
+              name="target_width"
+              rules={[{ required: true, message: "请输入目标宽度" }]}
+            >
+              <InputNumber min={256} max={4096} step={64} style={{ width: 92 }} />
+            </Form.Item>
+            <Typography.Text type="secondary">×</Typography.Text>
+            <Typography.Text type="secondary">高</Typography.Text>
+            <Form.Item
+              noStyle
+              name="target_height"
+              rules={[{ required: true, message: "请输入目标高度" }]}
+            >
+              <InputNumber min={256} max={4096} step={64} style={{ width: 92 }} />
+            </Form.Item>
+            <Typography.Text type="secondary">px</Typography.Text>
+          </Space>
+          <Button
+            icon={<EyeOutlined />}
+            onClick={() => setPreviewOpen(true)}
+          >
+            预览
+          </Button>
+        </div>
+      </Form>
+      <div
+        role="list"
+        aria-label="裁剪预览列表"
+        style={{
+          maxHeight: "min(52vh, 520px)",
+          overflowY: "auto",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: 6,
+        }}
+      >
+        {images.map((image, index) => (
+          <div
+            key={image.id}
+            role="listitem"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              minHeight: 64,
+              padding: "10px 16px",
+              borderBottom:
+                index < images.length - 1
+                  ? "1px solid rgba(255,255,255,0.08)"
+                  : undefined,
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <Typography.Text ellipsis style={{ display: "block" }}>
+                {image.title || image.id}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                {image.width}×{image.height} → {targetWidth}×{targetHeight}
+              </Typography.Text>
+            </div>
+          </div>
+        ))}
+      </div>
+      </Modal>
+      <Modal
+        title={`批量处理预览 · ${images.length} 张图片`}
+        open={previewOpen}
+        footer={null}
+        onCancel={() => setPreviewOpen(false)}
+        destroyOnHidden
+        width={1120}
+      >
+        <div
+          role="list"
+          aria-label="原图与处理结果预览列表"
+          style={{ maxHeight: "72vh", overflowY: "auto" }}
+        >
+          {images.map((image, index) => (
+            <div
+              key={image.id}
+              role="listitem"
+              style={{
+                padding: "0 0 20px",
+                marginBottom: 20,
+                borderBottom:
+                  index < images.length - 1
+                    ? "1px solid rgba(255,255,255,0.1)"
+                    : undefined,
+              }}
+            >
+              <Typography.Text strong style={{ display: "block", marginBottom: 10 }}>
+                {image.title || image.id}
+              </Typography.Text>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 16,
+                }}
+              >
+                <div>
+                  <Typography.Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
+                    原图 · {image.width}×{image.height}
+                  </Typography.Text>
+                  <div
+                    style={{
+                      height: "min(38vh, 360px)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                      background: "#11141a",
+                      borderRadius: 6,
+                    }}
+                  >
+                    <img
+                      src={`/api/images/${encodeURIComponent(image.id)}/raw?v=${encodeURIComponent(image.sha256)}`}
+                      alt={`原图 ${index + 1}`}
+                      loading="lazy"
+                      style={{ display: "block", width: "100%", height: "100%", objectFit: "contain" }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Typography.Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
+                    压缩裁剪后 · {targetWidth}×{targetHeight}
+                  </Typography.Text>
+                  <div
+                    style={{
+                      height: "min(38vh, 360px)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                      background: "#11141a",
+                      borderRadius: 6,
+                    }}
+                  >
+                    {previewErrors.has(image.id) ? (
+                      <Typography.Text type="secondary">无法生成当前尺寸的预览</Typography.Text>
+                    ) : (
+                      <img
+                        src={`/api/images/${encodeURIComponent(image.id)}/batch-crop-preview?target_width=${targetWidth}&target_height=${targetHeight}`}
+                        alt={`压缩裁剪后预览 ${index + 1}`}
+                        loading="lazy"
+                        onError={() =>
+                          setPreviewErrors((current) => new Set(current).add(image.id))
+                        }
+                        style={{ display: "block", width: "100%", height: "100%", objectFit: "contain" }}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -897,6 +1176,7 @@ export function ImagesPage() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [batchMoveOpen, setBatchMoveOpen] = useState(false);
   const [batchTagOpen, setBatchTagOpen] = useState(false);
+  const [batchCropOpen, setBatchCropOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
 
   const groupsState = useAsync(() => api.listImageGroups(), []);
@@ -1125,6 +1405,7 @@ export function ImagesPage() {
 
       {selectedRowKeys.length > 0 && (
         <Space
+          wrap
           style={{
             marginBottom: 16,
             padding: "8px 12px",
@@ -1146,6 +1427,13 @@ export function ImagesPage() {
             onClick={() => setBatchTagOpen(true)}
           >
             批量标签
+          </Button>
+          <Button
+            size="small"
+            icon={<ScissorOutlined />}
+            onClick={() => setBatchCropOpen(true)}
+          >
+            压缩并裁剪
           </Button>
           <Button
             size="small"
@@ -1304,6 +1592,14 @@ export function ImagesPage() {
         count={selectedRowKeys.length}
         onClose={() => setBatchTagOpen(false)}
         onApply={batchTags}
+      />
+      <BatchCropModal
+        open={batchCropOpen}
+        images={selectedRowKeys
+          .map((imageId) => images.find((image) => image.id === imageId))
+          .filter((image): image is ImageModel => image !== undefined)}
+        onClose={() => setBatchCropOpen(false)}
+        onDone={refreshAll}
       />
       <MediaBrowser
         open={browserOpen}

@@ -14,11 +14,13 @@
 from __future__ import annotations
 
 import mimetypes
+import math
 import os
 import re
 import shutil
 import subprocess
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -486,6 +488,123 @@ def crop_image(
         output.unlink(missing_ok=True)
         raise
     return {"image": to_jsonable(updated), "previous_path": previous_path, "output_path": relative_path}
+
+
+def _compress_then_center_crop(
+    source: PILImage.Image,
+    target_width: int,
+    target_height: int,
+) -> PILImage.Image:
+    scale = max(target_width / source.width, target_height / source.height)
+    if scale > 1:
+        raise ValueError("原图分辨率低于目标尺寸，无法仅压缩裁剪")
+    resized_width = max(target_width, math.ceil(source.width * scale))
+    resized_height = max(target_height, math.ceil(source.height * scale))
+    resized = source.resize(
+        (resized_width, resized_height),
+        resample=PILImage.Resampling.LANCZOS,
+    )
+    left = (resized_width - target_width) // 2
+    top = (resized_height - target_height) // 2
+    return resized.crop((left, top, left + target_width, top + target_height))
+
+
+@app.get("/api/images/{image_id}/batch-crop-preview")
+def preview_batch_crop_image(
+    image_id: str,
+    target_width: int = Query(..., ge=256, le=4096),
+    target_height: int = Query(..., ge=256, le=4096),
+    service: DatasetService = Depends(get_service),
+) -> Response:
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    source_path = Path(image.image_path or "")
+    if not source_path.is_file():
+        raise HTTPException(status_code=400, detail="图片文件不存在")
+    try:
+        with PILImage.open(source_path) as loaded:
+            source = ImageOps.exif_transpose(loaded).convert("RGB")
+            preview = _compress_then_center_crop(
+                source, target_width, target_height
+            )
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="图片文件无法读取") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    output = BytesIO()
+    preview.save(output, format="JPEG", quality=95, optimize=True)
+    return Response(
+        content=output.getvalue(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/images/batch-crop")
+def batch_crop_images(
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    try:
+        image_ids = list(dict.fromkeys(str(value) for value in payload["image_ids"]))
+        target_width = int(payload["target_width"])
+        target_height = int(payload["target_height"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="批量压缩裁剪参数格式错误") from exc
+    if not image_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一张图片")
+    if len(image_ids) > 500:
+        raise HTTPException(status_code=400, detail="单次最多裁剪 500 张图片")
+    if not 256 <= target_width <= 4096 or not 256 <= target_height <= 4096:
+        raise HTTPException(status_code=400, detail="目标宽高必须在 256 到 4096 像素之间")
+
+    completed: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for image_id in image_ids:
+        try:
+            image = service.get_image(image_id)
+            source_path = Path(image.image_path or "")
+            if not source_path.is_file():
+                raise ValueError("图片文件不存在")
+            with PILImage.open(source_path) as loaded:
+                source = ImageOps.exif_transpose(loaded).convert("RGB")
+                cropped = _compress_then_center_crop(
+                    source, target_width, target_height
+                )
+            _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+            output = _IMAGE_DIR / f"batch-crop-{uuid4().hex[:16]}.jpg"
+            cropped.save(output, format="JPEG", quality=95, optimize=True)
+            try:
+                stored_path = output.relative_to(Path.cwd())
+            except ValueError:
+                stored_path = output
+            relative_path = str(stored_path).replace("\\", "/")
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()[:16]
+            tags = list(dict.fromkeys([*image.tags, "批量压缩裁剪", f"裁剪来源:{image_id}"]))
+            try:
+                updated = service.update_image(
+                    image_id,
+                    image_path=relative_path,
+                    width=target_width,
+                    height=target_height,
+                    sha256=digest,
+                    tags=tags,
+                )
+            except Exception:
+                output.unlink(missing_ok=True)
+                raise
+            completed.append(to_jsonable(updated))
+        except (ServiceError, OSError, ValueError) as exc:
+            failed.append({"image_id": image_id, "error": str(exc)})
+
+    return {
+        "target_width": target_width,
+        "target_height": target_height,
+        "completed": completed,
+        "failed": failed,
+    }
 
 
 @app.post("/api/images/{image_id}/upscale")
