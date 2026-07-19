@@ -6,6 +6,9 @@
  */
 
 import type {
+  AiToolkitNode,
+  AiToolkitNodeInput,
+  AiToolkitNodeInspection,
   DatasetStats,
   DataSourceInfo,
   Dataset,
@@ -19,6 +22,7 @@ import type {
   AnnotationConfig,
   ExportOptionsResponse,
   ExportPayload,
+  DispatchTrainingPayload,
   ImageCreatePayload,
   ImageFilterParams,
   ImageGroup,
@@ -38,6 +42,7 @@ import type {
   VideoFilterParams,
   VideoGroup,
   VideoUpdatePayload,
+  TrainingTask,
 } from "./types";
 
 const API_BASE = "/api";
@@ -279,6 +284,34 @@ export const api = {
     }),
   getExportOptions: () =>
     request<ExportOptionsResponse>("/datasets/export/options"),
+  listAiToolkitNodes: () =>
+    request<AiToolkitNode[]>("/aitoolkit/nodes"),
+  createAiToolkitNode: (payload: AiToolkitNodeInput) =>
+    request<AiToolkitNode>("/aitoolkit/nodes", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateAiToolkitNode: (nodeId: string, payload: AiToolkitNodeInput) =>
+    request<AiToolkitNode>(`/aitoolkit/nodes/${nodeId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteAiToolkitNode: (nodeId: string) =>
+    request<void>(`/aitoolkit/nodes/${nodeId}`, { method: "DELETE" }),
+  testAiToolkitNode: (nodeId: string) =>
+    request<AiToolkitNodeInspection>(`/aitoolkit/nodes/${nodeId}/test`, {
+      method: "POST",
+    }),
+  listTrainingTasks: () => request<TrainingTask[]>("/training-tasks"),
+  dispatchTrainingTask: (datasetId: string, payload: DispatchTrainingPayload) =>
+    request<TrainingTask>(`/datasets/${datasetId}/training-tasks`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  refreshTrainingTask: (taskId: string) =>
+    request<TrainingTask>(`/training-tasks/${taskId}/refresh`, {
+      method: "POST",
+    }),
   exportDataset: async (
     datasetId: string,
     payload: ExportPayload,

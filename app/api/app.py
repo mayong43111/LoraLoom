@@ -24,13 +24,13 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image as PILImage, ImageOps
 
-from app.api.deps import get_service
+from app.api.deps import get_service, get_training_scheduler
 from app.api.plugins import (
     PLUGINS_DIR,
     PluginError,
@@ -49,11 +49,12 @@ from app.services.api import (
     VideoCreate,
     VideoFilter,
 )
+from app.services.training_scheduler import SchedulerError, TrainingScheduler
 
 app = FastAPI(
-    title="ImagesDataset API",
+    title="LoraLoom API",
     version="0.1.0",
-    description="图片数据集管理平台后端（当前为 mock 数据源）。",
+    description="LoRA 训练数据集策展与 ai-toolkit 节点调度 API。",
 )
 
 # 开发期允许 Vite dev server 跨域访问；生产由同源部署或反向代理承接。
@@ -1294,6 +1295,116 @@ def get_export_options() -> dict[str, Any]:
         for key, cfg in export_service.TRAINING_PRESETS.items()
     ]
     return {"base_models": export_service.BASE_MODELS, "presets": presets}
+
+
+@app.get("/api/aitoolkit/nodes")
+def list_aitoolkit_nodes(
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> list[dict[str, Any]]:
+    """列出已注册的 ai-toolkit 服务节点。"""
+    return [to_jsonable(node) for node in scheduler.list_nodes()]
+
+
+@app.post("/api/aitoolkit/nodes", status_code=201)
+def create_aitoolkit_node(
+    payload: dict[str, Any],
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    """注册一个 ai-toolkit Web UI 节点。"""
+    try:
+        node = scheduler.save_node(
+            name=str(payload.get("name") or ""),
+            base_url=str(payload.get("base_url") or ""),
+            auth_token=str(payload.get("auth_token") or ""),
+            gpu_ids=str(payload.get("gpu_ids") or "0"),
+            enabled=bool(payload.get("enabled", True)),
+        )
+    except SchedulerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return to_jsonable(node)
+
+
+@app.put("/api/aitoolkit/nodes/{node_id}")
+def update_aitoolkit_node(
+    node_id: str,
+    payload: dict[str, Any],
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    """更新节点；Token 留空表示保留原值。"""
+    try:
+        current = scheduler.get_node(node_id)
+        node = scheduler.save_node(
+            node_id=node_id,
+            name=str(payload.get("name", current.name)),
+            base_url=str(payload.get("base_url", current.base_url)),
+            auth_token=str(payload.get("auth_token") or ""),
+            gpu_ids=str(payload.get("gpu_ids", current.gpu_ids)),
+            enabled=bool(payload.get("enabled", current.enabled)),
+        )
+    except SchedulerError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return to_jsonable(node)
+
+
+@app.delete("/api/aitoolkit/nodes/{node_id}", status_code=204)
+def delete_aitoolkit_node(
+    node_id: str,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> Response:
+    try:
+        scheduler.delete_node(node_id)
+    except SchedulerError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=204)
+
+
+@app.post("/api/aitoolkit/nodes/{node_id}/test")
+def test_aitoolkit_node(
+    node_id: str,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    try:
+        return scheduler.inspect_node(node_id)
+    except SchedulerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/training-tasks")
+def list_training_tasks(
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> list[dict[str, Any]]:
+    return [to_jsonable(task) for task in scheduler.list_tasks()]
+
+
+@app.post("/api/datasets/{dataset_id}/training-tasks", status_code=202)
+def dispatch_training_task(
+    dataset_id: str,
+    payload: dict[str, Any],
+    background_tasks: BackgroundTasks,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    """登记任务并在后台把训练集发送到指定 ai-toolkit 节点。"""
+    node_id = str(payload.get("node_id") or "")
+    options = {key: value for key, value in payload.items() if key != "node_id"}
+    try:
+        task = scheduler.create_task(dataset_id, node_id, options)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SchedulerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(scheduler.dispatch, task.id)
+    return to_jsonable(task)
+
+
+@app.post("/api/training-tasks/{task_id}/refresh")
+def refresh_training_task(
+    task_id: str,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    try:
+        return to_jsonable(scheduler.refresh_task(task_id))
+    except SchedulerError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/datasets/{dataset_id}/export")

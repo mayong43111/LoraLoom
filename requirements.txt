@@ -7,6 +7,8 @@ uvicorn[standard]==0.34.0
 imageio-ffmpeg==0.6.0
 numpy==2.5.1
 pillow==12.3.0
+httpx==0.28.1
+PyYAML==6.0.2
 # 姿态·人脸标注插件（image.pose-face-annotation）自动识别依赖。
 # 使用插件自带的 YuNet 与 BlazePose ONNX 权重，可离线运行且无需 Torch/MediaPipe。
 opencv-python-headless==4.13.0.92

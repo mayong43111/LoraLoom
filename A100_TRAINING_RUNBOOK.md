@@ -1,6 +1,6 @@
 # A100 LoRA 训练运行手册
 
-本文记录 ImagesDataset 导出的 Qwen-Image LoRA 训练包在 Azure A100 VM 上的已验证运行方式。命令默认从 Windows PowerShell 执行。
+本文记录 LoraLoom 导出的 Qwen-Image LoRA 训练包在 Azure A100 VM 上的已验证运行方式。命令默认从 Windows PowerShell 执行。
 
 新训练任务分配或更换触发词前，先查阅 `TRIGGER_WORD_REGISTRY.md`。该文件是触发词状态、分词证据和禁用原因的统一登记表。
 

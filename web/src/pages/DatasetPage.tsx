@@ -28,6 +28,7 @@ import {
   ArrowLeftOutlined,
   RobotOutlined,
   ExportOutlined,
+  CloudUploadOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate, useParams } from "react-router-dom";
@@ -37,6 +38,7 @@ import { Thumbnail } from "@/components/Thumbnail";
 import { api } from "@/api/client";
 import type {
   AnnotateResult,
+  AiToolkitNode,
   Dataset,
   DatasetType,
   ExportBaseModel,
@@ -393,7 +395,7 @@ export function DatasetDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [annotateOpen, setAnnotateOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
+  const [exportMode, setExportMode] = useState<"export" | "dispatch" | null>(null);
 
   const loadDataset = useCallback(async () => {
     setLoading(true);
@@ -494,10 +496,20 @@ export function DatasetDetailPage() {
               {dataset.type === "image" && (
                 <Button
                   icon={<ExportOutlined />}
-                  onClick={() => setExportOpen(true)}
+                  onClick={() => setExportMode("export")}
                   disabled={items.length === 0}
                 >
                   导出训练包
+                </Button>
+              )}
+              {dataset.type === "image" && (
+                <Button
+                  type="primary"
+                  icon={<CloudUploadOutlined />}
+                  onClick={() => setExportMode("dispatch")}
+                  disabled={items.length === 0}
+                >
+                  发送训练任务
                 </Button>
               )}
               <Button type="primary" onClick={() => setImportOpen(true)}>
@@ -641,11 +653,12 @@ export function DatasetDetailPage() {
 
       {dataset && dataset.type === "image" && (
         <ExportModal
-          open={exportOpen}
+          open={exportMode !== null}
+          mode={exportMode ?? "export"}
           datasetId={id}
           items={items as ImageModel[]}
           selectedIds={selectedRowKeys}
-          onClose={() => setExportOpen(false)}
+          onClose={() => setExportMode(null)}
         />
       )}
     </div>
@@ -1076,12 +1089,14 @@ const RESOLUTION_OPTIONS = [
 /** 导出为 ai-toolkit 的 LoRA 训练包。 */
 function ExportModal({
   open,
+  mode,
   datasetId,
   items,
   selectedIds,
   onClose,
 }: {
   open: boolean;
+  mode: "export" | "dispatch";
   datasetId: string;
   items: ImageModel[];
   selectedIds: string[];
@@ -1098,6 +1113,9 @@ function ExportModal({
   const [stepsPerImage, setStepsPerImage] = useState<number | undefined>(
     undefined,
   );
+  const [triggerWord, setTriggerWord] = useState("");
+  const [nodes, setNodes] = useState<AiToolkitNode[]>([]);
+  const [nodeId, setNodeId] = useState<string | undefined>();
   const [running, setRunning] = useState(false);
 
   useEffect(() => {
@@ -1112,7 +1130,21 @@ function ExportModal({
       .catch(() => {
         /* 选项拉取失败时用默认值 */
       });
-  }, [open, selectedIds.length]);
+    if (mode === "dispatch") {
+      void api
+        .listAiToolkitNodes()
+        .then((result) => {
+          const enabled = result.filter((node) => node.enabled);
+          setNodes(enabled);
+          setNodeId((current) =>
+            enabled.some((node) => node.id === current)
+              ? current
+              : enabled[0]?.id,
+          );
+        })
+        .catch((err) => message.error(`加载训练节点失败：${err.message}`));
+    }
+  }, [open, mode, selectedIds.length]);
 
   const currentPreset = presets.find((p) => p.value === preset);
   const scopeItems =
@@ -1129,11 +1161,16 @@ function ExportModal({
       message.warning("没有可导出的图片（可能都缺少 Caption）");
       return;
     }
+    if (mode === "dispatch" && !nodeId) {
+      message.warning("请先添加并选择一个已启用的 ai-toolkit 节点");
+      return;
+    }
     setRunning(true);
     try {
-      const { blob, filename } = await api.exportDataset(datasetId, {
+      const payload = {
         base_model: baseModel,
         preset,
+        trigger_word: triggerWord,
         rank,
         steps_per_image: stepsPerImage,
         resolution:
@@ -1142,16 +1179,25 @@ function ExportModal({
             : resolution.split(",").map((r) => Number(r)),
         item_ids: scope === "selected" ? selectedIds : undefined,
         only_captioned: onlyCaptioned,
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      message.success(`已导出 ${filename}`);
+      };
+      if (mode === "dispatch") {
+        const task = await api.dispatchTrainingTask(datasetId, {
+          ...payload,
+          node_id: nodeId!,
+        });
+        message.success(`训练任务已提交：${task.id.slice(0, 8)}`);
+      } else {
+        const { blob, filename } = await api.exportDataset(datasetId, payload);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        message.success(`已导出 ${filename}`);
+      }
       onClose();
     } catch (err) {
       message.error((err as Error).message);
@@ -1163,15 +1209,35 @@ function ExportModal({
   return (
     <Modal
       open={open}
-      title="导出训练包（ai-toolkit LoRA）"
+      title={mode === "dispatch" ? "发送训练任务到 ai-toolkit" : "导出训练包（ai-toolkit LoRA）"}
       width={640}
       onCancel={onClose}
       onOk={handleExport}
-      okText={`导出（${exportCount} 张）`}
-      okButtonProps={{ loading: running, disabled: exportCount === 0 }}
+      okText={`${mode === "dispatch" ? "发送" : "导出"}（${exportCount} 张）`}
+      okButtonProps={{
+        loading: running,
+        disabled: exportCount === 0 || (mode === "dispatch" && !nodeId),
+      }}
       cancelText="取消"
     >
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        {mode === "dispatch" && (
+          <div>
+            <Typography.Text strong>目标节点</Typography.Text>
+            <Select
+              style={{ width: "100%", marginTop: 6 }}
+              value={nodeId}
+              onChange={setNodeId}
+              placeholder="选择已启用的 ai-toolkit 节点"
+              options={nodes.map((node) => ({
+                value: node.id,
+                label: `${node.name}（${node.base_url}）`,
+              }))}
+              notFoundContent="暂无可用节点，请先到“训练节点”页面添加"
+            />
+          </div>
+        )}
+
         <div>
           <Typography.Text strong>底模</Typography.Text>
           <Select
@@ -1187,6 +1253,16 @@ function ExportModal({
             placeholder="或填写自定义模型名，如 krea/Krea-2-Raw"
             value={baseModel}
             onChange={(e) => setBaseModel(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <Typography.Text strong>触发词</Typography.Text>
+          <Input
+            style={{ marginTop: 6 }}
+            value={triggerWord}
+            onChange={(event) => setTriggerWord(event.target.value)}
+            placeholder="例如 zxqv；会写入任务配置，Caption 应已包含该词"
           />
         </div>
 
@@ -1272,8 +1348,12 @@ function ExportModal({
         <Alert
           type="info"
           showIcon
-          message={`将导出 ${exportCount} 张图片（含同名 .txt Caption）+ ai-toolkit 训练配置。`}
-          description="产物为 zip：dataset/ 目录（图片 + .txt） + {name}.yaml + README.txt。放入 ai-toolkit 后运行 python run.py {name}.yaml。"
+          message={`将${mode === "dispatch" ? "发送" : "导出"} ${exportCount} 张图片（含同名 .txt Caption）和 ai-toolkit 训练配置。`}
+          description={
+            mode === "dispatch"
+              ? "调度器将在后台上传数据集、创建远端 Job 并加入节点训练队列；进度可在“训练节点”页面查看。"
+              : "产物为 zip：dataset/ 目录（图片 + .txt） + {name}.yaml + README.txt。放入 ai-toolkit 后运行 python run.py {name}.yaml。"
+          }
         />
       </Space>
     </Modal>

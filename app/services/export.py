@@ -202,7 +202,7 @@ def build_aitoolkit_config(
     guidance_scale = model_profile.get("guidance_scale", 4)
 
     return f"""---
-# ai-toolkit 训练配置（{model_profile['family']} LoRA），由 ImagesDataset 自动生成。
+# ai-toolkit 训练配置（{model_profile['family']} LoRA），由 LoraLoom 自动生成。
 # 用法：把本目录整个放到 ai-toolkit 下，然后运行：
 #   python run.py {slug}.yaml
 job: extension
@@ -268,7 +268,7 @@ def _readme(name: str, opts: ExportOptions, hp: dict[str, Any], count: int) -> s
     model_profile = _model_profile(opts.base_model)
     return (
         f"# {name} — {model_profile['family']} LoRA 训练包\n\n"
-        f"本包由 ImagesDataset 导出，面向 ai-toolkit (https://github.com/ostris/ai-toolkit)。\n\n"
+        f"本包由 LoraLoom 导出，面向 ai-toolkit (https://github.com/ostris/ai-toolkit)。\n\n"
         f"目录结构：\n"
         f"  {slug}.yaml       训练配置（ai-toolkit）\n"
         f"  dataset/          训练素材：图片 + 同名 .txt（Caption，触发词已写入）\n\n"

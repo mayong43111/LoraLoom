@@ -118,6 +118,53 @@ export interface ExportPayload {
   only_captioned?: boolean;
 }
 
+/** ai-toolkit 服务节点。认证 Token 只写入，不从后端返回。 */
+export interface AiToolkitNode {
+  id: string;
+  name: string;
+  base_url: string;
+  gpu_ids: string;
+  enabled: boolean;
+  auth_configured: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiToolkitNodeInput {
+  name: string;
+  base_url: string;
+  auth_token?: string;
+  gpu_ids?: string;
+  enabled?: boolean;
+}
+
+export interface AiToolkitNodeInspection {
+  ok: boolean;
+  node: AiToolkitNode;
+  datasets_folder?: string;
+  training_folder?: string;
+  gpus: Array<{ index: number; name: string }>;
+}
+
+export interface TrainingTask {
+  id: string;
+  dataset_id: string;
+  dataset_name: string;
+  node_id: string;
+  node_name: string;
+  remote_job_id?: string | null;
+  remote_dataset_name?: string | null;
+  status: string;
+  options: ExportPayload;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DispatchTrainingPayload extends ExportPayload {
+  node_id: string;
+}
+
 
 export interface DatasetStats {
   image_total: number;

@@ -18,5 +18,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: "videos", path: "/videos", title: "视频库", subtitle: "视频管理与抽帧", mvp: true },
   { key: "images", path: "/images", title: "图片库", subtitle: "浏览与筛选", mvp: true },
   { key: "datasets", path: "/datasets", title: "数据集", subtitle: "创建并导入素材", mvp: true },
+  { key: "training", path: "/training", title: "训练节点", subtitle: "节点与任务调度", mvp: true },
   { key: "settings", path: "/settings", title: "设置", subtitle: "参数配置", mvp: true },
 ] as const;

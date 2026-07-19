@@ -1,9 +1,9 @@
 {
-  "name": "imagesdataset-web",
+  "name": "loraloom-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "图片数据集管理平台前端（React + TypeScript + Ant Design）。",
+  "description": "LoraLoom LoRA 数据集策展与训练调度前端。",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

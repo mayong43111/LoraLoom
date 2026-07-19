@@ -96,6 +96,34 @@ CREATE TABLE IF NOT EXISTS dataset_items (
     PRIMARY KEY (dataset_id, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);
+
+CREATE TABLE IF NOT EXISTS aitoolkit_nodes (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    base_url   TEXT NOT NULL,
+    auth_token TEXT NOT NULL DEFAULT '',
+    gpu_ids    TEXT NOT NULL DEFAULT '0',
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS training_tasks (
+    id                  TEXT PRIMARY KEY,
+    dataset_id          TEXT NOT NULL,
+    dataset_name        TEXT NOT NULL,
+    node_id             TEXT NOT NULL,
+    node_name           TEXT NOT NULL,
+    remote_job_id       TEXT,
+    remote_dataset_name TEXT,
+    status              TEXT NOT NULL,
+    options_json        TEXT NOT NULL,
+    error               TEXT NOT NULL DEFAULT '',
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_training_tasks_created ON training_tasks(created_at);
+CREATE INDEX IF NOT EXISTS idx_training_tasks_node ON training_tasks(node_id);
 """
 
 

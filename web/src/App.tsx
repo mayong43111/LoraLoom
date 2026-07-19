@@ -10,6 +10,7 @@ import { ReviewPage } from "@/pages/ReviewPage";
 import { SelectionPage } from "@/pages/SelectionPage";
 import { DatasetListPage, DatasetDetailPage } from "@/pages/DatasetPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { TrainingPage } from "@/pages/TrainingPage";
 import { ToolPage } from "@/tools/ToolPage";
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/selection" element={<SelectionPage />} />
         <Route path="/datasets" element={<DatasetListPage />} />
         <Route path="/datasets/:id" element={<DatasetDetailPage />} />
+        <Route path="/training" element={<TrainingPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/tools/:id" element={<ToolPage />} />
       </Routes>

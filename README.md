@@ -1,29 +1,36 @@
-# 图片数据集管理平台
+# LoraLoom（织模）
 
-基于设计文档 [DESIGN.md](DESIGN.md) 与 [UI_DESIGN.md](UI_DESIGN.md) 实现的
-Web 应用（前后端分离）。
+**Curate. Dispatch. Train.**
 
-当前阶段：正式页面骨架 + 模拟服务（mock API）。前端通过 REST 访问后端，
-后端由服务层抽象接口 `DatasetService` 提供数据，当前实现为 `MockDatasetService`
-（确定性样例数据）。后续将其替换为接入 SQLite + 算法管线的真实实现，
-前端与路由层均无需改动。
+LoraLoom 是一个面向 LoRA 训练的数据集策展与任务调度平台。它负责整理图片和
+Caption、生成 ai-toolkit 训练配置，并把训练集派发到一个或多个 ai-toolkit 节点。
+节点负责执行训练，LoraLoom 负责节点维护、任务分发和状态跟踪。
 
 ## 技术栈
 
-- 后端：Python 3.10+（已在 3.14 上验证）、FastAPI、uvicorn。
+- 后端：Python 3.10+（已在 3.14 上验证）、FastAPI、SQLite、httpx。
 - 前端：React 18 + TypeScript + Vite + Ant Design。
+- 训练节点：ostris/ai-toolkit Web UI API。
 
 ## 架构
 
 ```
-浏览器 (React/AntD)  ──HTTP/JSON──▶  FastAPI 路由层  ──▶  DatasetService 抽象
-                                                          ├─ MockDatasetService（当前）
-                                                          └─ 真实后端（后续，SQLite+算法）
+浏览器 (React/AntD)
+  │ HTTP/JSON
+  ▼
+LoraLoom FastAPI ──▶ SQLiteDatasetService ──▶ SQLite / 本地素材
+  │
+  └──▶ TrainingScheduler ──HTTP/Bearer──▶ ai-toolkit 节点（一个或多个）
+            ├─ 数据集上传
+            ├─ Job 创建与排队
+            └─ 训练状态
 ```
 
 - 前端仅依赖 `/api` REST 契约与 `/api/meta/enums` 下发的枚举展示名，与后端实现松耦合。
 - 枚举以字符串取值传输，中文展示名单点来自后端，避免前后端重复维护。
-- 服务 ↔ API 的唯一装配点在 [app/api/deps.py](app/api/deps.py)，切换真实后端只改此处。
+- 数据集与调度任务持久化在 `workspace/dataset.sqlite`。
+- ai-toolkit Token 只写入本地数据库，节点查询 API 不返回 Token。
+- 服务装配点位于 [app/api/deps.py](app/api/deps.py)。
 
 ## 目录结构
 
@@ -32,10 +39,11 @@ app/
   domain/            领域模型与枚举（无 UI / 存储依赖）
     enums.py
     models.py
-  services/          服务层：抽象接口 + mock 实现
+  services/          数据集服务、SQLite 持久化、导出与训练调度
     api.py             DatasetService 抽象接口 + 筛选条件
-    mock_data.py       确定性样例数据工厂
-    mock_service.py
+    sqlite_service.py  SQLite 数据集服务
+    export.py          ai-toolkit 训练包与配置生成
+    training_scheduler.py  ai-toolkit 节点客户端与任务调度器
   api/               HTTP API 层
     serialization.py   领域对象 → JSON + 枚举元信息
     deps.py            服务依赖注入（唯一装配点）
@@ -45,10 +53,9 @@ web/                 前端应用
     api/               REST client、类型、枚举标签、请求 Hook
     components/         共享组件（EnumTag、Thumbnail、Placeholder 等）
     layout/            应用外壳（侧栏 + 顶栏）
-    pages/             12 个页面
+    pages/             数据集、训练节点、设置等页面
     nav.ts / colors.ts / theme.ts
-tests/
-  test_mock_service.py 领域/服务层单元测试
+tests/                服务、导出、插件和调度 API 测试
 ```
 
 ## 运行
@@ -63,7 +70,7 @@ Azure A100 上的 Qwen-Image LoRA 训练、监控和关机流程见
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.api.app:app --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.api.app:app --port 7777
 ```
 
 前端（另开终端）：
@@ -74,12 +81,23 @@ npm install
 npm run dev
 ```
 
-浏览器打开 http://localhost:5173 。前端通过 Vite 代理将 `/api` 转发到后端 8000 端口。
+浏览器打开 http://localhost:7778 。前端通过 Vite 代理将 `/api` 转发到后端 7777 端口。
+
+## ai-toolkit 节点调度
+
+1. 在“训练节点”页面添加 ai-toolkit Web UI 地址，例如 `http://10.0.0.5:8675`。
+2. 节点启用了 `AI_TOOLKIT_AUTH` 时，填写相同 Token，然后测试连接。
+3. 准备好图片数据集与 Caption 后，在数据集详情点击“发送训练任务”。
+4. 选择节点、底模、训练预设和图片范围。LoraLoom 会在后台上传数据集、创建
+  远端 Job 并加入训练队列。
+5. 在“训练节点”页面同步远端任务状态。
+
+节点地址必须能被 LoraLoom 后端直接访问。当前适配 ai-toolkit 官方 Web UI 的
+`/api/datasets/*`、`/api/jobs` 与 Job start/status 接口。
 
 ## MVP 范围与占位
 
-MVP 页面：概览、导入、下载、图片库、视频抽帧、质量、人物、复核、组包、
-导出（JSONL/CSV）、设置。
+主要页面：视频库、图片库、数据集、训练节点和设置。
 
 非 MVP、已占位并禁用的内容：
 

@@ -67,7 +67,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             color: "#e6e8ee",
           }}
         >
-          图片数据集平台
+          LoraLoom · 织模
         </div>
         <Menu
           theme="dark"

@@ -10,6 +10,7 @@ from functools import lru_cache
 
 from app.services.api import DatasetService
 from app.services.sqlite_service import SqliteDatasetService
+from app.services.training_scheduler import TrainingScheduler
 
 
 @lru_cache(maxsize=1)
@@ -20,3 +21,11 @@ def get_service() -> DatasetService:
     在此处替换实现即可，路由层与前端均无需改动。
     """
     return SqliteDatasetService()
+
+
+@lru_cache(maxsize=1)
+def get_training_scheduler() -> TrainingScheduler:
+    """返回与数据集服务共用 SQLite 文件的训练调度器。"""
+    service = get_service()
+    db_path = getattr(service, "db_path", "workspace/dataset.sqlite")
+    return TrainingScheduler(service, db_path)
