@@ -62,6 +62,12 @@ export interface AnnotationConfig {
   trigger_word: string;
 }
 
+export interface GenerationConfig {
+  reference_image_id: string;
+  reference_image_path: string;
+  reference_image_title: string;
+}
+
 /** AI 标注请求体。 */
 export interface AnnotatePayload {
   item_ids: string[];
@@ -87,10 +93,19 @@ export interface AnnotateResponse {
   results: AnnotateResult[];
 }
 
+/** 底模在显存/速度设置上的默认值（参照 ai-toolkit）。 */
+export interface MemoryDefaults {
+  gradient_checkpointing: boolean;
+  quantize: boolean;
+  quantize_te: boolean;
+  low_vram: boolean;
+}
+
 /** 导出（ai-toolkit）可选项。 */
 export interface ExportBaseModel {
   value: string;
   label: string;
+  memory_defaults?: MemoryDefaults;
 }
 
 export interface ExportPreset {
@@ -123,6 +138,11 @@ export interface ExportPayload {
   sample_prompts?: string[];
   item_ids?: string[];
   only_captioned?: boolean;
+  // 显存 / 速度权衡（对应 ai-toolkit 设置）。
+  gradient_checkpointing?: boolean;
+  quantize?: boolean;
+  quantize_te?: boolean;
+  low_vram?: boolean;
 }
 
 /** ai-toolkit 服务节点。认证 Token 只写入，不从后端返回。 */
@@ -164,6 +184,10 @@ export interface TrainingTask {
   status: string;
   options: ExportPayload;
   error: string;
+  step: number;
+  total_steps?: number | null;
+  info: string;
+  speed_string: string;
   created_at: string;
   updated_at: string;
 }
@@ -429,6 +453,18 @@ export interface ImageCreatePayload {
   width?: number;
   height?: number;
   path?: string;
+}
+
+/** 批量上传单个文件失败的明细。 */
+export interface ImageUploadError {
+  file: string;
+  error: string;
+}
+
+/** 批量上传图片的结果：成功登记的图片与失败明细。 */
+export interface ImageUploadResult {
+  created: ImageModel[];
+  errors: ImageUploadError[];
 }
 
 /** 编辑图片基本信息 / 移动分组的输入。硬指标（分辨率）不可编辑。 */

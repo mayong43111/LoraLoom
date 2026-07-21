@@ -59,3 +59,24 @@ def test_detects_standalone_hair_color_and_common_locations() -> None:
         "blonde woman standing on a beach",
         ["hair", "background"],
     ) == ["hair", "background"]
+
+
+def test_detects_disabled_action_equipment_and_text_overlays() -> None:
+    caption = (
+        "suspended sideways in a wooden frame, wrists attached to ropes and pulleys, "
+        "with a username watermark and subtitles"
+    )
+
+    assert _caption_forbidden_aspects(
+        caption,
+        ["equipment", "text_overlay"],
+    ) == ["equipment", "text_overlay"]
+
+
+def test_action_pose_is_not_rejected_when_optional_context_is_disabled() -> None:
+    caption = "suspended horizontally, arms extended overhead, legs split apart"
+
+    assert _caption_forbidden_aspects(
+        caption,
+        ["appearance", "clothing", "background", "text_overlay", "quality"],
+    ) == []

@@ -5,8 +5,11 @@ import {
   Card,
   Checkbox,
   Divider,
+  Drawer,
+  Dropdown,
   Empty,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
@@ -15,6 +18,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
   Alert,
@@ -31,6 +35,11 @@ import {
   ExportOutlined,
   CloudUploadOutlined,
   ScissorOutlined,
+  LeftOutlined,
+  RightOutlined,
+  RetweetOutlined,
+  DownOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate, useParams } from "react-router-dom";
@@ -38,7 +47,9 @@ import dayjs from "dayjs";
 import { PageHeader } from "@/components/PageHeader";
 import { Thumbnail } from "@/components/Thumbnail";
 import { api } from "@/api/client";
-import { BatchCropModal } from "@/pages/ImagesPage";
+import { BatchCropModal, CROP_SIZE_PRESETS } from "@/pages/ImagesPage";
+import ReactCrop, { type PercentCrop } from "react-image-crop";
+import "react-image-crop/dist/ReactCrop.css";
 import type {
   AnnotateResult,
   AiToolkitNode,
@@ -194,6 +205,80 @@ const CHARACTER_ASPECTS: {
   },
 ];
 
+const ACTION_ASPECTS = [
+  {
+    key: "equipment",
+    label: "器具与连接",
+    text: "the visible training apparatus, suspension frame, ropes, pulleys, cuffs, and how they connect to the wrists and ankles",
+    forbiddenText: "training equipment, apparatus, frame, ropes, cables, pulleys, straps, cuffs, hooks, or weights",
+    excludedKeys: ["equipment"],
+  },
+  {
+    key: "framing",
+    label: "景别/人物完整度",
+    text: "whether the complete body and the relevant apparatus are visible",
+    forbiddenText: "shot framing, crop, camera distance, or whether the complete body is visible",
+    excludedKeys: ["framing"],
+  },
+  {
+    key: "camera",
+    label: "身体朝向/视角",
+    text: "body orientation and camera viewpoint when they help distinguish the action",
+    forbiddenText: "camera angle, viewpoint, front view, side view, or back view",
+    excludedKeys: ["camera"],
+  },
+  {
+    key: "background",
+    label: "场景背景",
+    text: "the surrounding location and background",
+    forbiddenText: "background, location, environment, room, gym, studio, walls, or floor",
+    excludedKeys: ["background"],
+  },
+  {
+    key: "appearance",
+    label: "参考人物外观",
+    text: "the person's identity-related appearance, including age, gender, face, hair, skin, expression, and body build",
+    forbiddenText: "age, gender, face, expression, eyes, skin, hair, body build, or accessories",
+    excludedKeys: [
+      "age", "gender", "face", "expression", "eyes", "skin", "hair",
+      "facial_hair", "body", "accessories",
+    ],
+  },
+  {
+    key: "clothing",
+    label: "衣着鞋袜",
+    text: "clothing and footwear",
+    forbiddenText: "clothing, outfit colors, garments, shoes, socks, or bare feet",
+    excludedKeys: ["clothing"],
+  },
+  {
+    key: "text_overlay",
+    label: "字幕/水印/Logo",
+    text: "visible subtitles, captions, watermarks, logos, account names, and other overlaid text",
+    forbiddenText: "subtitles, captions, watermarks, logos, account names, text overlays, or visible written text",
+    excludedKeys: ["text_overlay"],
+  },
+  {
+    key: "quality",
+    label: "模糊/画质问题",
+    text: "visible blur, noise, compression artifacts, and other image-quality defects",
+    forbiddenText: "blur, sharpness, noise, compression artifacts, pixelation, or resolution",
+    excludedKeys: ["quality"],
+  },
+];
+
+const DEFAULT_ACTION_ASPECTS = [
+  "equipment",
+  "framing",
+  "camera",
+  "background",
+  "appearance",
+  "clothing",
+  "text_overlay",
+];
+const ACTION_TRIGGER_WORD = "Pravilo training";
+const ACTION_CONTEXT_TAG_PREFIXES = ["动作类别:", "人物数:", "姿态:", "景别:"];
+
 /** 标注输出语言。 */
 type AnnotationLanguage = "en" | "zh";
 
@@ -210,6 +295,7 @@ interface AnnotationTemplate {
   supportsTrigger: boolean;
   /** 是否支持“描述维度”多选（仅人物形象）。 */
   supportsAspects: boolean;
+  supportsActionAspects?: boolean;
   /** 生成系统提示词。 */
   build: (aspects: string[], language: AnnotationLanguage) => string;
 }
@@ -256,14 +342,32 @@ const ANNOTATION_TEMPLATES: AnnotationTemplate[] = [
     label: "人物动作（动作训练）",
     supportsTrigger: true,
     supportsAspects: false,
-    build: (_aspects, language) =>
-      [
+    supportsActionAspects: true,
+    build: (aspects, language) => {
+      const chosen = ACTION_ASPECTS.filter((aspect) => aspects.includes(aspect.key));
+      const excluded = ACTION_ASPECTS.filter((aspect) => !aspects.includes(aspect.key));
+      return [
         "You are an expert dataset captioner for action/pose training.",
-        "Write a single concise, comma-separated caption emphasizing the person's action, pose, gesture and body movement in the image.",
-        "Describe what the subject is doing rather than static identity details.",
+        "Write one concise, comma-separated training caption.",
+        "Always describe the primary person's action, pose, limb positions, body orientation, and suspension or support state. Distinguish a held pose from an action transition when visible.",
+        "Use support-state words precisely: say seated, standing, kneeling, or lying only when the corresponding body part visibly rests on a surface; otherwise say suspended or hanging.",
+        "Distinguish gripping an object from a wrist or ankle being secured in a cuff or strap. Use gripping or holding only when the bare hand or fingers visibly wrap around an object; when a hand is enclosed by a padded cuff, describe the wrist as secured in the cuff. Never infer a grip, attachment, or connection that is outside the frame or visually unclear.",
+        chosen.length
+          ? `Also describe ONLY these optional categories: ${chosen.map((aspect) => aspect.text).join(", ")}.`
+          : "Do not describe any optional categories.",
+        excluded.length
+          ? `Never describe or mention ${excluded.map((aspect) => aspect.forbiddenText).join(", ")}.`
+          : "",
+        aspects.includes("text_overlay")
+          ? "If subtitles, watermarks, logos, account names, or overlaid text are visible, describe only their generic type and screen position. Never transcribe, quote, translate, or summarize their actual text. Omit this category when no overlay is visible."
+          : "",
+        "Existing metadata is reference evidence only. Never copy metadata field names, colon-formatted tags, IDs, source names, or labels such as person count and shot type into the caption; express relevant visible facts as natural language.",
+        "Describe only visible facts. Do not infer identity, intent, medical effects, pain, or emotions.",
+        "Do not write the concept name or trigger phrase; the application adds it as a fixed prefix.",
         LANGUAGE_INSTRUCTION[language],
         "Output ONLY the caption text, no quotes, no extra words.",
-      ].join(" "),
+      ].filter(Boolean).join(" ");
+    },
   },
   {
     key: "style",
@@ -520,6 +624,7 @@ export function DatasetDetailPage() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [batchCropOpen, setBatchCropOpen] = useState(false);
+  const [batchCaptionOpen, setBatchCaptionOpen] = useState(false);
   const [exportMode, setExportMode] = useState<"export" | "dispatch" | null>(null);
 
   const loadDataset = useCallback(async () => {
@@ -562,15 +667,6 @@ export function DatasetDetailPage() {
     }
   };
 
-  const handleRemoveItem = async (itemId: string) => {
-    try {
-      await api.removeDatasetItems(id, [itemId]);
-      await Promise.all([loadItems(), loadDataset()]);
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
   if (notFound) {
     return (
       <div>
@@ -605,30 +701,47 @@ export function DatasetDetailPage() {
         subtitle={dataset?.description || `共 ${dataset?.item_count ?? 0} 项`}
         extra={
           dataset ? (
-            <Space>
+            <Space wrap>
               {dataset.type === "image" && (
-                <Button
-                  icon={<ScissorOutlined />}
-                  onClick={() => setBatchCropOpen(true)}
+                <Dropdown
                   disabled={items.length === 0}
+                  menu={{
+                    items: [
+                      {
+                        key: "crop",
+                        icon: <ScissorOutlined />,
+                        label: `压缩并裁剪${
+                          selectedRowKeys.length > 0
+                            ? `（选中 ${selectedRowKeys.length}）`
+                            : "（全部）"
+                        }`,
+                      },
+                      {
+                        key: "annotate",
+                        icon: <RobotOutlined />,
+                        label: `AI 标注${
+                          selectedRowKeys.length > 0
+                            ? `（选中 ${selectedRowKeys.length}）`
+                            : ""
+                        }`,
+                      },
+                      {
+                        key: "replace",
+                        icon: <RetweetOutlined />,
+                        label: "批量替换 Caption",
+                      },
+                    ],
+                    onClick: ({ key }) => {
+                      if (key === "crop") setBatchCropOpen(true);
+                      else if (key === "annotate") setAnnotateOpen(true);
+                      else if (key === "replace") setBatchCaptionOpen(true);
+                    },
+                  }}
                 >
-                  压缩并裁剪
-                  {selectedRowKeys.length > 0
-                    ? `（选中 ${selectedRowKeys.length}）`
-                    : "（全部）"}
-                </Button>
-              )}
-              {dataset.type === "image" && (
-                <Button
-                  icon={<RobotOutlined />}
-                  onClick={() => setAnnotateOpen(true)}
-                  disabled={items.length === 0}
-                >
-                  AI 标注
-                  {selectedRowKeys.length > 0
-                    ? `（选中 ${selectedRowKeys.length}）`
-                    : ""}
-                </Button>
+                  <Button icon={<ToolOutlined />}>
+                    素材工具 <DownOutlined />
+                  </Button>
+                </Dropdown>
               )}
               {dataset.type === "image" && (
                 <Button
@@ -682,6 +795,15 @@ export function DatasetDetailPage() {
               showSizeChanger: false,
               showTotal: (t) => `共 ${t} 项`,
             }}
+            onRow={(item) => ({
+              style: { cursor: "pointer" },
+              onClick: (event) => {
+                // 点击行选择框时只切换选中，不打开编辑抽屉。
+                const target = event.target as HTMLElement;
+                if (target.closest(".ant-table-selection-column")) return;
+                setEditing(item);
+              },
+            })}
             columns={[
               {
                 title: dataset?.type === "image" ? "预览" : "名称",
@@ -727,38 +849,42 @@ export function DatasetDetailPage() {
                     <Typography.Text type="secondary">无</Typography.Text>
                   ),
               },
-              {
-                title: "操作",
-                key: "actions",
-                width: 130,
-                align: "center",
-                render: (_, item) => (
-                  <Space>
-                    <Button size="small" onClick={() => setEditing(item)}>
-                      编辑
-                    </Button>
-                    <Button
-                      size="small"
-                      danger
-                      onClick={() => handleRemoveItem(item.id)}
-                    >
-                      移除
-                    </Button>
-                  </Space>
-                ),
-              },
             ]}
           />
         )}
       </Card>
 
-      <ItemEditModal
+      <ItemEditDrawer
         datasetId={id}
         item={editing}
+        items={items}
+        onNavigate={setEditing}
         onClose={() => setEditing(null)}
         onSaved={async () => {
-          setEditing(null);
-          await loadItems();
+          // 保存后仅刷新数据，不关闭抽屉，保持停留在当前条目。
+          const res = await api.listDatasetItems(id);
+          setItems(res.items);
+          setEditing(
+            (cur) => res.items.find((it) => it.id === cur?.id) ?? null,
+          );
+        }}
+        onCropped={async (updatedId) => {
+          const res = await api.listDatasetItems(id);
+          setItems(res.items);
+          setEditing(res.items.find((it) => it.id === updatedId) ?? null);
+        }}
+        onRemove={async () => {
+          if (!editing) return;
+          const removedId = editing.id;
+          const idx = items.findIndex((it) => it.id === removedId);
+          await api.removeDatasetItems(id, [removedId]);
+          const res = await api.listDatasetItems(id);
+          setItems(res.items);
+          await loadDataset();
+          // 移除后自动前往下一张（原本紧随其后的条目现位于同一索引）。
+          const next =
+            res.items[idx] ?? res.items[res.items.length - 1] ?? null;
+          setEditing(next);
         }}
       />
 
@@ -814,32 +940,136 @@ export function DatasetDetailPage() {
           onClose={() => setExportMode(null)}
         />
       )}
+
+      {dataset && dataset.type === "image" && (
+        <BatchCaptionReplaceModal
+          open={batchCaptionOpen}
+          datasetId={id}
+          items={items}
+          onClose={() => setBatchCaptionOpen(false)}
+          onDone={async () => {
+            await loadItems();
+          }}
+        />
+      )}
     </div>
   );
 }
 
 /** 编辑数据集内某条目的标签与说明（仅对当前数据集生效，不影响原始素材）。 */
-function ItemEditModal({
+function ItemEditDrawer({
   datasetId,
   item,
+  items,
+  onNavigate,
   onClose,
   onSaved,
+  onCropped,
+  onRemove,
 }: {
   datasetId: string;
   item: ImageModel | Video | null;
+  items: (ImageModel | Video)[];
+  onNavigate: (item: ImageModel | Video) => void;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
+  onCropped: (updatedId: string) => void | Promise<void>;
+  onRemove: () => void | Promise<void>;
 }) {
   const [caption, setCaption] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  // 裁剪压缩：仅预览，确认后才实施。
+  const [cropping, setCropping] = useState(false);
+  const [cropPreset, setCropPreset] = useState("1024x1024");
+  const [cropSize, setCropSize] = useState({ width: 1024, height: 1024 });
+  const [crop, setCrop] = useState<PercentCrop>();
+  const [applyingCrop, setApplyingCrop] = useState(false);
 
   useEffect(() => {
     if (item) {
       setCaption(item.caption ?? "");
       setTags(item.tags ?? []);
+      setCropping(false);
     }
   }, [item]);
+
+  const index = item ? items.findIndex((it) => it.id === item.id) : -1;
+  const hasPrev = index > 0;
+  const hasNext = index >= 0 && index < items.length - 1;
+  const goPrev = () => hasPrev && onNavigate(items[index - 1]);
+  const goNext = () => hasNext && onNavigate(items[index + 1]);
+
+  // 依据目标尺寸的宽高比，在原图中央给出可容纳的最大裁剪框（百分比）。
+  const buildCenteredCrop = (
+    imgWidth: number,
+    imgHeight: number,
+    targetWidth: number,
+    targetHeight: number,
+  ): PercentCrop => {
+    const aspect = targetWidth / targetHeight;
+    let cw = imgWidth;
+    let ch = imgWidth / aspect;
+    if (ch > imgHeight) {
+      ch = imgHeight;
+      cw = imgHeight * aspect;
+    }
+    return {
+      unit: "%",
+      width: (cw / imgWidth) * 100,
+      height: (ch / imgHeight) * 100,
+      x: ((imgWidth - cw) / 2 / imgWidth) * 100,
+      y: ((imgHeight - ch) / 2 / imgHeight) * 100,
+    };
+  };
+
+  const startCropping = () => {
+    if (!item || !isImage(item)) return;
+    const preset =
+      CROP_SIZE_PRESETS.find((p) => p.value === cropPreset) ??
+      CROP_SIZE_PRESETS[2];
+    setCropPreset(preset.value);
+    setCropSize({ width: preset.width, height: preset.height });
+    setCrop(
+      buildCenteredCrop(item.width, item.height, preset.width, preset.height),
+    );
+    setCropping(true);
+  };
+
+  const applyCropPreset = (value: string) => {
+    const preset = CROP_SIZE_PRESETS.find((p) => p.value === value);
+    if (!preset || !item || !isImage(item)) return;
+    setCropPreset(value);
+    setCropSize({ width: preset.width, height: preset.height });
+    setCrop(
+      buildCenteredCrop(item.width, item.height, preset.width, preset.height),
+    );
+  };
+
+  const confirmCrop = async () => {
+    if (!item || !isImage(item) || !crop?.width || !crop?.height) return;
+    setApplyingCrop(true);
+    try {
+      const result = await api.cropResizeImage(item.id, {
+        x: Math.round((crop.x / 100) * item.width),
+        y: Math.round((crop.y / 100) * item.height),
+        width: Math.round((crop.width / 100) * item.width),
+        height: Math.round((crop.height / 100) * item.height),
+        target_width: cropSize.width,
+        target_height: cropSize.height,
+      });
+      message.success(
+        `已裁剪压缩为 ${result.image.width}×${result.image.height}`,
+      );
+      setCropping(false);
+      await onCropped(item.id);
+    } catch (err) {
+      message.error((err as Error).message);
+    } finally {
+      setApplyingCrop(false);
+    }
+  };
 
   const handleOk = async () => {
     if (!item) return;
@@ -855,42 +1085,199 @@ function ItemEditModal({
     }
   };
 
+  const handleRemove = async () => {
+    if (!item) return;
+    setRemoving(true);
+    try {
+      await onRemove();
+    } catch (err) {
+      message.error((err as Error).message);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const showImage = item !== null && isImage(item);
+  const imageUrl =
+    item !== null && isImage(item)
+      ? `/api/images/${encodeURIComponent(item.id)}/raw?v=${encodeURIComponent(item.sha256)}`
+      : "";
+
   return (
-    <Modal
-      title="编辑标签与说明"
+    <Drawer
+      title={
+        <Space>
+          <span>编辑标签与说明</span>
+          {index >= 0 && (
+            <Typography.Text type="secondary" style={{ fontWeight: "normal" }}>
+              {index + 1} / {items.length}
+            </Typography.Text>
+          )}
+        </Space>
+      }
+      placement="right"
+      width="50%"
       open={item !== null}
-      onOk={handleOk}
-      onCancel={onClose}
-      okText="保存"
-      cancelText="取消"
-      confirmLoading={saving}
+      onClose={onClose}
       destroyOnClose
+      extra={
+        cropping ? (
+          <Space>
+            <Button onClick={() => setCropping(false)}>取消裁剪</Button>
+            <Button
+              type="primary"
+              icon={<ScissorOutlined />}
+              loading={applyingCrop}
+              disabled={!crop?.width || !crop?.height}
+              onClick={() => void confirmCrop()}
+            >
+              确认裁剪压缩
+            </Button>
+          </Space>
+        ) : (
+          <Space>
+            <Button icon={<LeftOutlined />} disabled={!hasPrev} onClick={goPrev}>
+              上一张
+            </Button>
+            <Button
+              icon={<RightOutlined />}
+              disabled={!hasNext}
+              onClick={goNext}
+            >
+              下一张
+            </Button>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" loading={saving} onClick={handleOk}>
+              保存
+            </Button>
+          </Space>
+        )
+      }
+      footer={
+        cropping ? null : (
+          <Popconfirm
+            title="确认从当前数据集移除该条目？"
+            okText="移除"
+            okButtonProps={{ danger: true }}
+            onConfirm={handleRemove}
+          >
+            <Button danger block loading={removing}>
+              从数据集移除
+            </Button>
+          </Popconfirm>
+        )
+      }
     >
-      <Typography.Paragraph type="secondary">
-        默认取自原始素材；此处的修改只对当前数据集生效，不影响素材库中的原图。
-      </Typography.Paragraph>
-      <Form layout="vertical">
-        <Form.Item label="说明（Caption）">
-          <Input.TextArea
-            rows={4}
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="用于训练的描述文本"
-            showCount
+      {cropping && showImage ? (
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            message="先选择目标尺寸（自动按比例给出裁剪框），再拖动/缩放选择保留区域"
+            description="仅预览，确认后才会按目标尺寸压缩裁剪并更新当前图片。原物理图片会保留。"
           />
-        </Form.Item>
-        <Form.Item label="标签">
-          <Select
-            mode="tags"
-            value={tags}
-            onChange={setTags}
-            style={{ width: "100%" }}
-            placeholder="输入后回车添加多个标签"
-            tokenSeparators={[","]}
-          />
-        </Form.Item>
-      </Form>
-    </Modal>
+          <Space align="center" wrap>
+            <Typography.Text style={{ whiteSpace: "nowrap" }}>
+              目标尺寸
+            </Typography.Text>
+            <Select
+              value={cropPreset}
+              onChange={applyCropPreset}
+              style={{ width: 220 }}
+              options={CROP_SIZE_PRESETS.map((p) => ({
+                value: p.value,
+                label: p.label,
+              }))}
+            />
+            <Typography.Text type="secondary">
+              输出 {cropSize.width}×{cropSize.height}
+            </Typography.Text>
+          </Space>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              maxHeight: "calc(100vh - 320px)",
+              overflow: "auto",
+              background: "#11141a",
+              borderRadius: 8,
+            }}
+          >
+            <ReactCrop
+              crop={crop}
+              onChange={(_, percentCrop) => setCrop(percentCrop)}
+              aspect={cropSize.width / cropSize.height}
+              keepSelection
+            >
+              <img
+                src={imageUrl}
+                alt={item.title || item.id}
+                style={{ maxWidth: "100%", maxHeight: "calc(100vh - 340px)" }}
+              />
+            </ReactCrop>
+          </div>
+        </Space>
+      ) : (
+        <>
+          {showImage ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                marginBottom: 12,
+                background: "#000",
+                borderRadius: 8,
+                overflow: "hidden",
+              }}
+            >
+              <Image
+                src={imageUrl}
+                alt={item.title}
+                style={{ maxHeight: 420, objectFit: "contain" }}
+              />
+            </div>
+          ) : item ? (
+            <Typography.Title level={5} style={{ marginBottom: 16 }}>
+              {item.title}
+            </Typography.Title>
+          ) : null}
+          {showImage && (
+            <Button
+              block
+              icon={<ScissorOutlined />}
+              style={{ marginBottom: 16 }}
+              onClick={startCropping}
+            >
+              裁剪压缩
+            </Button>
+          )}
+          <Typography.Paragraph type="secondary">
+            默认取自原始素材；此处的修改只对当前数据集生效，不影响素材库中的原图。
+          </Typography.Paragraph>
+          <Form layout="vertical">
+            <Form.Item label="说明（Caption）">
+              <Input.TextArea
+                rows={6}
+                value={caption}
+                onChange={(e) => setCaption(e.target.value)}
+                placeholder="用于训练的描述文本"
+                showCount
+              />
+            </Form.Item>
+            <Form.Item label="标签">
+              <Select
+                mode="tags"
+                value={tags}
+                onChange={setTags}
+                style={{ width: "100%" }}
+                placeholder="输入后回车添加多个标签"
+                tokenSeparators={[","]}
+              />
+            </Form.Item>
+          </Form>
+        </>
+      )}
+    </Drawer>
   );
 }
 
@@ -916,6 +1303,7 @@ function AnnotateModal({
   const [aspects, setAspects] = useState<string[]>([
     ...CHARACTER_ASPECTS.map((aspect) => aspect.key),
   ]);
+  const [actionAspects, setActionAspects] = useState<string[]>(DEFAULT_ACTION_ASPECTS);
   const [triggerWord, setTriggerWord] = useState("");
   const [prependTrigger, setPrependTrigger] = useState(true);
   const [scope, setScope] = useState<"selected" | "all">("selected");
@@ -937,21 +1325,29 @@ function AnnotateModal({
     [templateKey],
   );
 
-  // 打开时载入统一设定（触发词）。
+  // 动作概念使用固定自然语言触发短语；其它模板沿用统一设定。
   useEffect(() => {
     if (!open) return;
     setResults(null);
     setProgress({ done: 0, total: 0 });
     setScope(selectedIds.length > 0 ? "selected" : "all");
+    if (templateKey === "action") {
+      setActionAspects(DEFAULT_ACTION_ASPECTS);
+      setTriggerWord(ACTION_TRIGGER_WORD);
+      setPrependTrigger(true);
+      setLanguage("zh");
+      setIncludeContext(true);
+      return;
+    }
     api
       .getAnnotationConfig()
       .then((cfg) => setTriggerWord(cfg.trigger_word ?? ""))
       .catch(() => undefined);
-  }, [open, selectedIds.length]);
+  }, [open, selectedIds.length, templateKey]);
 
   const systemPrompt = useMemo(
-    () => template.build(aspects, language),
-    [template, aspects, language],
+    () => template.build(template.supportsActionAspects ? actionAspects : aspects, language),
+    [template, aspects, actionAspects, language],
   );
 
   const targetIds = useMemo(
@@ -970,8 +1366,17 @@ function AnnotateModal({
       if (base) parts.push(base);
       if (includeContext && item) {
         const ctx: string[] = [];
-        if (item.caption?.trim()) ctx.push(`Existing caption: ${item.caption.trim()}`);
-        if (item.tags?.length) ctx.push(`Existing tags: ${item.tags.join(", ")}`);
+        if (templateKey !== "action" && item.caption?.trim()) {
+          ctx.push(`Existing caption: ${item.caption.trim()}`);
+        }
+        if (item.tags?.length) {
+          const tags = templateKey === "action"
+            ? item.tags.filter((tag) =>
+                ACTION_CONTEXT_TAG_PREFIXES.some((prefix) => tag.startsWith(prefix)),
+              )
+            : item.tags;
+          if (tags.length) ctx.push(`Existing tags: ${tags.join(", ")}`);
+        }
         if (ctx.length) {
           parts.push(
             `Use the existing metadata below as reference if helpful. ${ctx.join(
@@ -982,7 +1387,7 @@ function AnnotateModal({
       }
       return parts.join(" ");
     },
-    [userText, includeContext],
+    [userText, includeContext, templateKey],
   );
 
   const handleRun = async () => {
@@ -1019,6 +1424,10 @@ function AnnotateModal({
               ? CHARACTER_ASPECTS.filter(
                   (aspect) => !aspects.includes(aspect.key),
                 ).map((aspect) => aspect.key)
+              : template.supportsActionAspects
+                ? ACTION_ASPECTS.filter(
+                    (aspect) => !actionAspects.includes(aspect.key),
+                  ).flatMap((aspect) => aspect.excludedKeys)
               : undefined,
           });
           all.push(...res.results);
@@ -1119,6 +1528,30 @@ function AnnotateModal({
               style={{ display: "block", fontSize: 12, marginTop: 4 }}
             >
               未勾选的维度将被强制忽略（提示词中明确禁止提及）。
+            </Typography.Text>
+          </Form.Item>
+        )}
+
+        {template.supportsActionAspects && (
+          <Form.Item
+            label="动作标注参考内容"
+            style={{ marginBottom: 12 }}
+            tooltip="动作、肢体位置和悬吊状态始终标注；以下开关控制是否额外描述对应内容。关闭项会在模型输出后再次校验。"
+          >
+            <Checkbox.Group
+              className="annotation-aspect-grid"
+              value={actionAspects}
+              onChange={(values) => setActionAspects(values as string[])}
+              options={ACTION_ASPECTS.map((aspect) => ({
+                value: aspect.key,
+                label: aspect.label,
+              }))}
+            />
+            <Typography.Text
+              type="secondary"
+              style={{ display: "block", fontSize: 12, marginTop: 4 }}
+            >
+              正式概念训练默认描述器具、人物、衣着、视角、背景和文字叠加；画质问题应通过删图处理。
             </Typography.Text>
           </Form.Item>
         )}
@@ -1250,6 +1683,122 @@ const RESOLUTION_OPTIONS = [
   { label: "仅 1024", value: "1024" },
 ];
 
+/** 批量替换当前数据集所有条目 Caption 中匹配到的词。 */
+function BatchCaptionReplaceModal({
+  open,
+  datasetId,
+  items,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  datasetId: string;
+  items: (ImageModel | Video)[];
+  onClose: () => void;
+  onDone: () => void | Promise<void>;
+}) {
+  const [find, setFind] = useState("");
+  const [replaceWith, setReplaceWith] = useState("");
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setFind("");
+      setReplaceWith("");
+    }
+  }, [open]);
+
+  const matched = useMemo(() => {
+    if (!find) return { count: 0, occurrences: 0 };
+    let count = 0;
+    let occurrences = 0;
+    for (const item of items) {
+      const caption = item.caption || "";
+      if (caption.includes(find)) {
+        count += 1;
+        occurrences += caption.split(find).length - 1;
+      }
+    }
+    return { count, occurrences };
+  }, [items, find]);
+
+  const submit = async () => {
+    if (!find) {
+      message.warning("请填写要替换的词");
+      return;
+    }
+    setRunning(true);
+    try {
+      let changed = 0;
+      for (const item of items) {
+        const caption = item.caption || "";
+        if (!caption.includes(find)) continue; // 只替换匹配到的
+        const next = caption.split(find).join(replaceWith);
+        if (next === caption) continue;
+        await api.updateDatasetItem(datasetId, item.id, { caption: next });
+        changed += 1;
+      }
+      if (changed > 0) message.success(`已更新 ${changed} 条 Caption`);
+      else message.info("没有命中的 Caption");
+      await onDone();
+      onClose();
+    } catch (err) {
+      message.error((err as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="批量替换 Caption"
+      onCancel={onClose}
+      onOk={submit}
+      okText={`替换（命中 ${matched.count} 条）`}
+      okButtonProps={{
+        loading: running,
+        disabled: !find || matched.count === 0,
+      }}
+      cancelText="取消"
+      destroyOnHidden
+    >
+      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          在当前数据集所有条目的 Caption 中，把「要替换的词」替换为「替换用的词」。仅修改命中的条目，其余保持不变；替换用的词留空表示删除该词。
+        </Typography.Paragraph>
+        <div>
+          <Typography.Text strong>要替换的词</Typography.Text>
+          <Input
+            style={{ marginTop: 6 }}
+            value={find}
+            onChange={(e) => setFind(e.target.value)}
+            placeholder="被匹配的原词 / 短语"
+          />
+        </div>
+        <div>
+          <Typography.Text strong>替换用的词</Typography.Text>
+          <Input
+            style={{ marginTop: 6 }}
+            value={replaceWith}
+            onChange={(e) => setReplaceWith(e.target.value)}
+            placeholder="替换后的词（留空表示删除）"
+          />
+        </div>
+        <Alert
+          type={find && matched.count === 0 ? "warning" : "info"}
+          showIcon
+          message={
+            find
+              ? `命中 ${matched.count} 条 Caption，共 ${matched.occurrences} 处将被替换`
+              : "填写要替换的词后显示命中数量"
+          }
+        />
+      </Space>
+    </Modal>
+  );
+}
+
 /** 导出为 ai-toolkit 的 LoRA 训练包。 */
 function ExportModal({
   open,
@@ -1280,6 +1829,11 @@ function ExportModal({
   const [learningRate, setLearningRate] = useState(0.0001);
   const [triggerWord, setTriggerWord] = useState("");
   const [samplePrompts, setSamplePrompts] = useState("");
+  // 显存 / 速度（对应 ai-toolkit 设置，默认沿用底模推荐值）。
+  const [gradientCheckpointing, setGradientCheckpointing] = useState(true);
+  const [quantize, setQuantize] = useState(true);
+  const [quantizeTe, setQuantizeTe] = useState(true);
+  const [lowVram, setLowVram] = useState(false);
   const [nodes, setNodes] = useState<AiToolkitNode[]>([]);
   const [nodeId, setNodeId] = useState<string | undefined>();
   const [running, setRunning] = useState(false);
@@ -1359,6 +1913,19 @@ function ExportModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presets]);
 
+  // 依据所选底模的 ai-toolkit 推荐值初始化显存/速度开关。
+  useEffect(() => {
+    if (!open) return;
+    const model = baseModels.find((m) => m.value === baseModel);
+    const defaults = model?.memory_defaults;
+    if (defaults) {
+      setGradientCheckpointing(defaults.gradient_checkpointing);
+      setQuantize(defaults.quantize);
+      setQuantizeTe(defaults.quantize_te);
+      setLowVram(defaults.low_vram);
+    }
+  }, [open, baseModel, baseModels]);
+
   const handleExport = async () => {
     if (exportCount === 0) {
       message.warning("没有可导出的图片（可能都缺少 Caption）");
@@ -1387,6 +1954,10 @@ function ExportModal({
             : resolution.split(",").map((r) => Number(r)),
         item_ids: scope === "selected" ? selectedIds : undefined,
         only_captioned: onlyCaptioned,
+        gradient_checkpointing: gradientCheckpointing,
+        quantize,
+        quantize_te: quantizeTe,
+        low_vram: lowVram,
       };
       if (mode === "dispatch") {
         const task = await api.dispatchTrainingTask(datasetId, {
@@ -1428,165 +1999,266 @@ function ExportModal({
       }}
       cancelText="取消"
     >
-      <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        {mode === "dispatch" && (
-          <div>
-            <Typography.Text strong>目标节点</Typography.Text>
-            <Select
-              style={{ width: "100%", marginTop: 6 }}
-              value={nodeId}
-              onChange={setNodeId}
-              placeholder="选择已启用的 ai-toolkit 节点"
-              options={nodes.map((node) => ({
-                value: node.id,
-                label: `${node.name}（${node.base_url}）`,
-              }))}
-              notFoundContent="暂无可用节点，请先到“训练节点”页面添加"
-            />
-          </div>
-        )}
+      <Tabs
+        defaultActiveKey="basic"
+        items={[
+          {
+            key: "basic",
+            label: "普通设置",
+            children: (
+              <Space
+                direction="vertical"
+                size="middle"
+                style={{ width: "100%" }}
+              >
+                {mode === "dispatch" && (
+                  <div>
+                    <Typography.Text strong>目标节点</Typography.Text>
+                    <Select
+                      style={{ width: "100%", marginTop: 6 }}
+                      value={nodeId}
+                      onChange={setNodeId}
+                      placeholder="选择已启用的 ai-toolkit 节点"
+                      options={nodes.map((node) => ({
+                        value: node.id,
+                        label: `${node.name}（${node.base_url}）`,
+                      }))}
+                      notFoundContent="暂无可用节点，请先到“训练节点”页面添加"
+                    />
+                  </div>
+                )}
 
-        <div>
-          <Typography.Text strong>底模</Typography.Text>
-          <Select
-            style={{ width: "100%", marginTop: 6 }}
-            value={baseModel}
-            onChange={setBaseModel}
-            options={baseModels.map((m) => ({ label: m.label, value: m.value }))}
-            showSearch
-            popupMatchSelectWidth={false}
-          />
-          <Input
-            style={{ marginTop: 6 }}
-            placeholder="或填写自定义模型名，如 krea/Krea-2-Raw"
-            value={baseModel}
-            onChange={(e) => setBaseModel(e.target.value)}
-          />
-        </div>
+                <div>
+                  <Typography.Text strong>底模</Typography.Text>
+                  <Select
+                    style={{ width: "100%", marginTop: 6 }}
+                    value={baseModel}
+                    onChange={setBaseModel}
+                    options={baseModels.map((m) => ({
+                      label: m.label,
+                      value: m.value,
+                    }))}
+                    showSearch
+                    popupMatchSelectWidth={false}
+                  />
+                  <Input
+                    style={{ marginTop: 6 }}
+                    placeholder="或填写自定义模型名，如 krea/Krea-2-Raw"
+                    value={baseModel}
+                    onChange={(e) => setBaseModel(e.target.value)}
+                  />
+                </div>
 
-        <div>
-          <Typography.Text strong>训练预设</Typography.Text>
-          <Radio.Group
-            style={{ display: "block", marginTop: 6 }}
-            value={preset}
-            onChange={(e) => applyPresetDefaults(e.target.value)}
-          >
-            <Space direction="vertical">
-              {presets.map((p) => (
-                <Radio key={p.value} value={p.value}>
-                  {p.label}
-                  <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                    rank {p.rank}，每图约 {p.steps_per_image} 步
+                <div>
+                  <Typography.Text strong>训练预设</Typography.Text>
+                  <Radio.Group
+                    style={{ display: "block", marginTop: 6 }}
+                    value={preset}
+                    onChange={(e) => applyPresetDefaults(e.target.value)}
+                  >
+                    <Space direction="vertical">
+                      {presets.map((p) => (
+                        <Radio key={p.value} value={p.value}>
+                          {p.label}
+                          <Typography.Text
+                            type="secondary"
+                            style={{ marginLeft: 8 }}
+                          >
+                            rank {p.rank}，每图约 {p.steps_per_image} 步
+                          </Typography.Text>
+                        </Radio>
+                      ))}
+                    </Space>
+                  </Radio.Group>
+                </div>
+
+                <div>
+                  <Typography.Text strong>模型触发词</Typography.Text>
+                  <Input
+                    style={{ marginTop: 6 }}
+                    value={triggerWord}
+                    onChange={(event) => setTriggerWord(event.target.value)}
+                    placeholder="会写入训练配置；Caption 应包含该词"
+                  />
+                </div>
+
+                <div>
+                  <Typography.Text strong>
+                    测试集（测试提示词，每行一条）
                   </Typography.Text>
-                </Radio>
-              ))}
-            </Space>
-          </Radio.Group>
-        </div>
+                  <Input.TextArea
+                    rows={3}
+                    style={{ marginTop: 6 }}
+                    value={samplePrompts}
+                    onChange={(event) => setSamplePrompts(event.target.value)}
+                  />
+                </div>
 
-        <Divider orientation="left" plain style={{ margin: "4px 0" }}>
-          参数设置
-        </Divider>
+                <div>
+                  <Typography.Text strong>导出范围</Typography.Text>
+                  <Radio.Group
+                    style={{ display: "block", marginTop: 6 }}
+                    value={scope}
+                    onChange={(e) => setScope(e.target.value)}
+                  >
+                    <Radio value="selected" disabled={selectedIds.length === 0}>
+                      仅选中（{selectedIds.length}）
+                    </Radio>
+                    <Radio value="all">全部（{items.length}）</Radio>
+                  </Radio.Group>
+                </div>
 
-        <Space size="middle" wrap>
-          <div>
-            <Typography.Text strong>训练步数 Training Steps</Typography.Text>
-            <InputNumber
-              min={1}
-              max={1000000}
-              step={100}
-              value={trainingSteps}
-              style={{ width: 190, marginTop: 6, display: "block" }}
-              onChange={(value) => setTrainingSteps(value ?? 800)}
-            />
-          </div>
-          <div>
-            <Typography.Text strong>学习率 Learning Rate</Typography.Text>
-            <InputNumber
-              min="0.000001"
-              max="1"
-              step="0.00001"
-              stringMode
-              value={String(learningRate)}
-              style={{ width: 190, marginTop: 6, display: "block" }}
-              onChange={(value) => setLearningRate(Number(value ?? 0.0001))}
-            />
-          </div>
-          <div>
-            <Typography.Text strong>LoRA 阶数 LoRA Rank</Typography.Text>
-            <InputNumber
-              min={1}
-              max={512}
-              step={8}
-              value={rank}
-              style={{ width: 190, marginTop: 6, display: "block" }}
-              onChange={(value) => setRank(value ?? 16)}
-            />
-          </div>
-        </Space>
+                <Space>
+                  <Switch checked={onlyCaptioned} onChange={setOnlyCaptioned} />
+                  <Typography.Text>仅导出已有 Caption 的图片</Typography.Text>
+                </Space>
+              </Space>
+            ),
+          },
+          {
+            key: "advanced",
+            label: "高阶设置",
+            children: (
+              <Space
+                direction="vertical"
+                size="middle"
+                style={{ width: "100%" }}
+              >
+                <Divider orientation="left" plain style={{ margin: "4px 0" }}>
+                  训练参数
+                </Divider>
 
-        <div>
-          <Typography.Text strong>模型触发词</Typography.Text>
-          <Input
-            style={{ marginTop: 6 }}
-            value={triggerWord}
-            onChange={(event) => setTriggerWord(event.target.value)}
-            placeholder="会写入训练配置；Caption 应包含该词"
-          />
-        </div>
+                <Space size="middle" wrap>
+                  <div>
+                    <Typography.Text strong>训练步数 Training Steps</Typography.Text>
+                    <InputNumber
+                      min={1}
+                      max={1000000}
+                      step={100}
+                      value={trainingSteps}
+                      style={{ width: 190, marginTop: 6, display: "block" }}
+                      onChange={(value) => setTrainingSteps(value ?? 800)}
+                    />
+                  </div>
+                  <div>
+                    <Typography.Text strong>学习率 Learning Rate</Typography.Text>
+                    <InputNumber
+                      min="0.000001"
+                      max="1"
+                      step="0.00001"
+                      stringMode
+                      value={String(learningRate)}
+                      style={{ width: 190, marginTop: 6, display: "block" }}
+                      onChange={(value) => setLearningRate(Number(value ?? 0.0001))}
+                    />
+                  </div>
+                  <div>
+                    <Typography.Text strong>LoRA 阶数 LoRA Rank</Typography.Text>
+                    <InputNumber
+                      min={1}
+                      max={512}
+                      step={8}
+                      value={rank}
+                      style={{ width: 190, marginTop: 6, display: "block" }}
+                      onChange={(value) => setRank(value ?? 16)}
+                    />
+                  </div>
+                </Space>
 
-        <div>
-          <Typography.Text strong>测试集（测试提示词，每行一条）</Typography.Text>
-          <Input.TextArea
-            rows={3}
-            style={{ marginTop: 6 }}
-            value={samplePrompts}
-            onChange={(event) => setSamplePrompts(event.target.value)}
-          />
-        </div>
+                <Space size="large" wrap>
+                  <div>
+                    <Typography.Text strong>分辨率分桶</Typography.Text>
+                    <Select
+                      style={{ width: 220, marginTop: 6, display: "block" }}
+                      value={resolution}
+                      onChange={setResolution}
+                      options={RESOLUTION_OPTIONS}
+                    />
+                  </div>
+                </Space>
 
-        <Space size="large" wrap>
-          <div>
-            <Typography.Text strong>分辨率分桶</Typography.Text>
-            <Select
-              style={{ width: 220, marginTop: 6, display: "block" }}
-              value={resolution}
-              onChange={setResolution}
-              options={RESOLUTION_OPTIONS}
-            />
-          </div>
-        </Space>
+                <Divider orientation="left" plain style={{ margin: "4px 0" }}>
+                  显存 / 速度（优化项）
+                </Divider>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="对应 ai-toolkit 显存设置。显存充足时关闭「梯度检查点 / 量化」可用显存换速度（更快、更精确）；默认沿用底模推荐值。"
+                />
+                <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                  <Space align="center">
+                    <Switch
+                      checked={gradientCheckpointing}
+                      onChange={setGradientCheckpointing}
+                    />
+                    <span>
+                      <Typography.Text strong>
+                        梯度检查点（gradient_checkpointing）
+                      </Typography.Text>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ marginLeft: 8 }}
+                      >
+                        开启省显存 · 关闭更快
+                      </Typography.Text>
+                    </span>
+                  </Space>
+                  <Space align="center">
+                    <Switch checked={quantize} onChange={setQuantize} />
+                    <span>
+                      <Typography.Text strong>量化底模（quantize）</Typography.Text>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ marginLeft: 8 }}
+                      >
+                        开启省显存 · 关闭更快更精确
+                      </Typography.Text>
+                    </span>
+                  </Space>
+                  <Space align="center">
+                    <Switch checked={quantizeTe} onChange={setQuantizeTe} />
+                    <span>
+                      <Typography.Text strong>
+                        量化文本编码器（quantize_te）
+                      </Typography.Text>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ marginLeft: 8 }}
+                      >
+                        开启省显存
+                      </Typography.Text>
+                    </span>
+                  </Space>
+                  <Space align="center">
+                    <Switch checked={lowVram} onChange={setLowVram} />
+                    <span>
+                      <Typography.Text strong>低显存模式（low_vram）</Typography.Text>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ marginLeft: 8 }}
+                      >
+                        开启更省显存 · 但更慢
+                      </Typography.Text>
+                    </span>
+                  </Space>
+                </Space>
+              </Space>
+            ),
+          },
+        ]}
+      />
 
-        <div>
-          <Typography.Text strong>导出范围</Typography.Text>
-          <Radio.Group
-            style={{ display: "block", marginTop: 6 }}
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-          >
-            <Radio value="selected" disabled={selectedIds.length === 0}>
-              仅选中（{selectedIds.length}）
-            </Radio>
-            <Radio value="all">全部（{items.length}）</Radio>
-          </Radio.Group>
-        </div>
-
-        <Space>
-          <Switch checked={onlyCaptioned} onChange={setOnlyCaptioned} />
-          <Typography.Text>仅导出已有 Caption 的图片</Typography.Text>
-        </Space>
-
-        <Alert
-          type="info"
-          showIcon
-          message={`将${mode === "dispatch" ? "发送" : "导出"} ${exportCount} 张图片（含同名 .txt Caption）和 ai-toolkit 训练配置。`}
-          description={
-            mode === "dispatch"
-              ? "调度器将在后台上传数据集、创建远端 Job 并加入节点训练队列；进度可在“训练节点”页面查看。"
-              : "产物为 zip：dataset/ 目录（图片 + .txt） + {name}.yaml + README.txt。放入 ai-toolkit 后运行 python run.py {name}.yaml。"
-          }
-        />
-      </Space>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginTop: 12 }}
+        message={`将${mode === "dispatch" ? "发送" : "导出"} ${exportCount} 张图片（含同名 .txt Caption）和 ai-toolkit 训练配置。`}
+        description={
+          mode === "dispatch"
+            ? "调度器将在后台上传数据集、创建远端 Job 并加入节点训练队列；进度可在“训练节点”页面查看。"
+            : "产物为 zip：dataset/ 目录（图片 + .txt） + {name}.yaml + README.txt。放入 ai-toolkit 后运行 python run.py {name}.yaml。"
+        }
+      />
     </Modal>
   );
 }

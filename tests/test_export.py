@@ -37,6 +37,24 @@ def test_krea_2_raw_uses_krea2_training_profile() -> None:
     assert process["sample"]["sample_steps"] == 52
 
 
+def test_z_image_is_available_as_base_model() -> None:
+    assert any(model["value"] == "Tongyi-MAI/Z-Image" for model in BASE_MODELS)
+
+
+def test_z_image_uses_zimage_training_profile() -> None:
+    process = _build_process("Tongyi-MAI/Z-Image")
+
+    assert process["model"] == {
+        "name_or_path": "Tongyi-MAI/Z-Image",
+        "arch": "zimage",
+        "quantize": True,
+        "quantize_te": True,
+    }
+    assert process["train"]["lr"] == 1e-4
+    assert process["train"]["timestep_type"] == "weighted"
+    assert process["sample"]["sample_steps"] == 30
+
+
 def test_qwen_export_profile_is_unchanged() -> None:
     process = _build_process("Qwen/Qwen-Image-2512")
 

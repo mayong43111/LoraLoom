@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS training_tasks (
     status              TEXT NOT NULL,
     options_json        TEXT NOT NULL,
     error               TEXT NOT NULL DEFAULT '',
+    step                INTEGER NOT NULL DEFAULT 0,
+    total_steps         INTEGER,
+    info                TEXT NOT NULL DEFAULT '',
+    speed_string        TEXT NOT NULL DEFAULT '',
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
 );
@@ -158,6 +162,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE dataset_items ADD COLUMN caption TEXT")
     if "tags" not in cols:
         conn.execute("ALTER TABLE dataset_items ADD COLUMN tags TEXT")
+
+    task_cols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(training_tasks)").fetchall()
+    }
+    for name, definition in (
+        ("step", "INTEGER NOT NULL DEFAULT 0"),
+        ("total_steps", "INTEGER"),
+        ("info", "TEXT NOT NULL DEFAULT ''"),
+        ("speed_string", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if name not in task_cols:
+            conn.execute(f"ALTER TABLE training_tasks ADD COLUMN {name} {definition}")
 
 
 def is_empty(conn: sqlite3.Connection) -> bool:

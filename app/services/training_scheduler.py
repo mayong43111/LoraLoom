@@ -7,6 +7,7 @@ import json
 import mimetypes
 import ntpath
 import posixpath
+import re
 import sqlite3
 import threading
 import zipfile
@@ -25,6 +26,22 @@ from app.services.api import DatasetService
 
 class SchedulerError(Exception):
     """节点或派发操作失败。"""
+
+
+_TRAINING_PROGRESS_RE = re.compile(r"(?<!\d)(\d+)/(\d+)\s*\[")
+_TRAINING_SPEED_RE = re.compile(r"(\d+(?:\.\d+)?(?:ms|s)/it)")
+
+
+def _progress_from_log(log: str) -> tuple[int, int, str] | None:
+    matches = list(_TRAINING_PROGRESS_RE.finditer(log))
+    if not matches:
+        return None
+    max_total = max(int(match.group(2)) for match in matches)
+    last = next(
+        match for match in reversed(matches) if int(match.group(2)) == max_total
+    )
+    speeds = _TRAINING_SPEED_RE.findall(log[last.start() :])
+    return int(last.group(1)), int(last.group(2)), speeds[-1] if speeds else ""
 
 
 def _now() -> str:
@@ -55,6 +72,10 @@ class TrainingTask:
     status: str
     options: dict[str, Any]
     error: str
+    step: int
+    total_steps: int | None
+    info: str
+    speed_string: str
     created_at: str
     updated_at: str
 
@@ -102,6 +123,10 @@ class AiToolkitClientProtocol(Protocol):
     def start_job(self, node: _StoredNode, job_id: str) -> None: ...
 
     def get_job(self, node: _StoredNode, job_id: str) -> dict[str, Any]: ...
+
+    def stop_job(self, node: _StoredNode, job_id: str) -> None: ...
+
+    def delete_job(self, node: _StoredNode, job_id: str) -> None: ...
 
 
 class AiToolkitClient:
@@ -209,9 +234,32 @@ class AiToolkitClient:
 
     def start_job(self, node: _StoredNode, job_id: str) -> None:
         self._request(node, "GET", f"/api/jobs/{job_id}/start")
+        self._request(node, "GET", f"/api/queue/{node.gpu_ids}/start")
 
     def get_job(self, node: _StoredNode, job_id: str) -> dict[str, Any]:
-        return self._request(node, "GET", "/api/jobs", params={"id": job_id}).json()
+        job = self._request(
+            node, "GET", "/api/jobs", params={"id": job_id}
+        ).json()
+        if str(job.get("status")) == "running" and not int(job.get("step") or 0):
+            log_data = self._request(
+                node, "GET", f"/api/jobs/{job_id}/log"
+            ).json()
+            progress = _progress_from_log(str(log_data.get("log") or ""))
+            if progress:
+                step, total_steps, speed = progress
+                job.update(
+                    step=step,
+                    total_steps=total_steps,
+                    speed_string=speed,
+                    info="Training",
+                )
+        return job
+
+    def stop_job(self, node: _StoredNode, job_id: str) -> None:
+        self._request(node, "GET", f"/api/jobs/{job_id}/stop")
+
+    def delete_job(self, node: _StoredNode, job_id: str) -> None:
+        self._request(node, "GET", f"/api/jobs/{job_id}/delete")
 
 
 class TrainingScheduler:
@@ -260,6 +308,14 @@ class TrainingScheduler:
             status=row["status"],
             options=json.loads(row["options_json"]),
             error=row["error"],
+            step=int(row["step"] or 0),
+            total_steps=(
+                int(row["total_steps"])
+                if row["total_steps"] is not None
+                else None
+            ),
+            info=row["info"],
+            speed_string=row["speed_string"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -465,6 +521,16 @@ class TrainingScheduler:
                 else None
             ),
             only_captioned=bool(options.get("only_captioned", True)),
+            gradient_checkpointing=bool(
+                options.get("gradient_checkpointing", True)
+            ),
+            quantize=bool(options.get("quantize", True)),
+            quantize_te=(
+                bool(options["quantize_te"])
+                if options.get("quantize_te") is not None
+                else None
+            ),
+            low_vram=bool(options.get("low_vram", False)),
         )
 
     @staticmethod
@@ -491,7 +557,48 @@ class TrainingScheduler:
         try:
             remote = self.client.get_job(node, task.remote_job_id)
             status = str(remote.get("status") or task.status)
-            self._update_task(task_id, status=status, error="")
+            self._update_task(
+                task_id,
+                status=status,
+                error="",
+                step=int(remote.get("step") or 0),
+                total_steps=(
+                    int(remote["total_steps"])
+                    if remote.get("total_steps") is not None
+                    else task.total_steps
+                ),
+                info=str(remote.get("info") or ""),
+                speed_string=str(remote.get("speed_string") or ""),
+            )
         except Exception as exc:  # 保留远端状态，仅记录同步错误
             self._update_task(task_id, error=f"状态同步失败：{exc}")
         return self.get_task(task_id)
+
+    def stop_task(self, task_id: str) -> TrainingTask:
+        """停止远端训练 Job；本地任务标记为已停止。"""
+        task = self.get_task(task_id)
+        if task.remote_job_id:
+            node = self.get_node(task.node_id)
+            self.client.stop_job(node, task.remote_job_id)
+        self._update_task(task_id, status="stopped", info="已停止")
+        return self.get_task(task_id)
+
+    def delete_task(self, task_id: str) -> None:
+        """删除任务：尽力停止并删除远端 Job，再移除本地记录。"""
+        task = self.get_task(task_id)
+        if task.remote_job_id:
+            try:
+                node = self.get_node(task.node_id)
+            except SchedulerError:
+                node = None
+            if node is not None:
+                # 远端不可达时不阻断本地删除，避免残留无法清理的记录。
+                try:
+                    self.client.stop_job(node, task.remote_job_id)
+                except SchedulerError:
+                    pass
+                try:
+                    self.client.delete_job(node, task.remote_job_id)
+                except SchedulerError:
+                    pass
+        self._write("DELETE FROM training_tasks WHERE id = ?", (task_id,))

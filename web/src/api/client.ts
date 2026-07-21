@@ -17,6 +17,7 @@ import type {
   DownloadTask,
   EnumMetadata,
   FrameJob,
+  GenerationConfig,
   AnnotateResponse,
   AnnotatePayload,
   AnnotationConfig,
@@ -32,6 +33,7 @@ import type {
   ImageCropSuggestion,
   ImageUpscaleResult,
   ImageUpdatePayload,
+  ImageUploadResult,
   ImportBatch,
   LlmConfig,
   LlmConfigInput,
@@ -113,6 +115,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(crop),
     }),
+  cropResizeImage: (
+    imageId: string,
+    crop: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      target_width: number;
+      target_height: number;
+    },
+  ) =>
+    request<ImageCropResult>(`/images/${imageId}/crop-resize`, {
+      method: "POST",
+      body: JSON.stringify(crop),
+    }),
   batchCropImages: (
     imageIds: string[],
     targetWidth: number,
@@ -155,6 +172,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  uploadImages: (payload: {
+    files: File[];
+    group_id?: string | null;
+    tags?: string[];
+  }) => {
+    const form = new FormData();
+    for (const file of payload.files) {
+      const relative =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+        file.name;
+      form.append("files", file, relative);
+    }
+    if (payload.group_id) form.append("group_id", payload.group_id);
+    if (payload.tags?.length) form.append("tags", payload.tags.join(","));
+    return request<ImageUploadResult>("/images/upload", {
+      method: "POST",
+      body: form,
+      headers: {},
+    });
+  },
   updateImage: (imageId: string, payload: ImageUpdatePayload) =>
     request<ImageModel>(`/images/${imageId}`, {
       method: "PATCH",
@@ -230,6 +267,12 @@ export const api = {
   getSelection: (selectionId: string) =>
     request<Selection>(`/selections/${selectionId}`),
   getLlmConfig: () => request<LlmConfig>("/settings/llm"),
+  getGenerationConfig: () =>
+    request<GenerationConfig>("/settings/generation"),
+  setGenerationReferenceImage: (imageId: string) =>
+    request<GenerationConfig>(`/settings/generation/reference-image/${imageId}`, {
+      method: "PUT",
+    }),
   saveLlmConfig: (payload: LlmConfigInput) =>
     request<LlmConfig>("/settings/llm", {
       method: "PUT",
@@ -326,6 +369,14 @@ export const api = {
   refreshTrainingTask: (taskId: string) =>
     request<TrainingTask>(`/training-tasks/${taskId}/refresh`, {
       method: "POST",
+    }),
+  stopTrainingTask: (taskId: string) =>
+    request<TrainingTask>(`/training-tasks/${taskId}/stop`, {
+      method: "POST",
+    }),
+  deleteTrainingTask: (taskId: string) =>
+    request<{ deleted: string }>(`/training-tasks/${taskId}`, {
+      method: "DELETE",
     }),
   exportDataset: async (
     datasetId: string,

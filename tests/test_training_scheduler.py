@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
 
+import httpx
 from PIL import Image as PILImage
 from fastapi.testclient import TestClient
 
@@ -11,7 +12,12 @@ from app.api.deps import get_training_scheduler
 from app.domain.enums import DatasetType
 from app.services.api import ImageCreate
 from app.services.sqlite_service import SqliteDatasetService
-from app.services.training_scheduler import TrainingScheduler, _StoredNode
+from app.services.training_scheduler import (
+    AiToolkitClient,
+    TrainingScheduler,
+    _StoredNode,
+    _progress_from_log,
+)
 
 
 class FakeAiToolkitClient:
@@ -50,7 +56,52 @@ class FakeAiToolkitClient:
         self.started.append(job_id)
 
     def get_job(self, node: _StoredNode, job_id: str) -> dict[str, Any]:
-        return {"id": job_id, "status": "running"}
+        return {
+            "id": job_id,
+            "status": "running",
+            "step": 12,
+            "total_steps": 800,
+            "info": "Training",
+            "speed_string": "1.2 s/it",
+        }
+
+
+def test_client_starts_job_and_target_gpu_queue(monkeypatch) -> None:
+    requested_urls: list[str] = []
+
+    def fake_request(method: str, url: str, **kwargs: Any) -> httpx.Response:
+        requested_urls.append(url)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    node = _StoredNode(
+        id="node-1",
+        name="A100",
+        base_url="http://aitk.example:8675",
+        auth_token="",
+        gpu_ids="0",
+        enabled=True,
+        created_at="now",
+        updated_at="now",
+    )
+
+    AiToolkitClient().start_job(node, "job-1")
+
+    assert requested_urls == [
+        "http://aitk.example:8675/api/jobs/job-1/start",
+        "http://aitk.example:8675/api/queue/0/start",
+    ]
+
+
+def test_progress_from_log_uses_latest_training_step() -> None:
+    log = (
+        "Loading model\n"
+        "run: 2%| | 82/3500 [01:55<1:04:11, 1.13s/it]\r"
+        "run: 2%| | 84/3500 [01:58<1:10:45, 1.24s/it]\n"
+        "Generating samples: 0/3 [00:00<?, ?it/s]"
+    )
+
+    assert _progress_from_log(log) == (84, 3500, "1.24s/it")
 
 
 def test_dispatch_uploads_dataset_creates_job_and_syncs_status(tmp_path: Path) -> None:
@@ -109,6 +160,10 @@ def test_dispatch_uploads_dataset_creates_job_and_syncs_status(tmp_path: Path) -
 
     refreshed = scheduler.refresh_task(task.id)
     assert refreshed.status == "running"
+    assert refreshed.step == 12
+    assert refreshed.total_steps == 800
+    assert refreshed.info == "Training"
+    assert refreshed.speed_string == "1.2 s/it"
 
 
 def test_node_public_data_never_exposes_auth_token(tmp_path: Path) -> None:

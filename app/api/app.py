@@ -26,7 +26,17 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -152,6 +162,14 @@ _CAPTION_FORBIDDEN_PATTERNS = {
         r"\b(?:image quality|high quality|low quality|sharp(?:ness)?|blurr?y|blur|noise|noisy|grain(?:y)?|compression artifacts?|pixelated|low resolution|high resolution)\b|图像质量|画质|清晰|模糊|噪点|颗粒|压缩痕迹|像素化|低分辨率|高分辨率",
         re.IGNORECASE,
     ),
+    "equipment": re.compile(
+        r"\b(?:equipment|apparatus|frame|ropes?|cables?|pulleys?|straps?|cuffs?|hooks?|weights?)\b|器具|器械|框架|绳索|钢索|滑轮|绑带|护具|挂钩|配重",
+        re.IGNORECASE,
+    ),
+    "text_overlay": re.compile(
+        r"\b(?:subtitles?|captions?|watermarks?|logos?|account names?|usernames?|text overlays?|written text|on-screen text)\b|字幕|水印|标志|徽标|账号名|用户名|文字叠加|画面文字",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -258,6 +276,30 @@ def get_annotation_settings() -> dict[str, Any]:
 def update_annotation_settings(payload: dict[str, Any]) -> dict[str, Any]:
     """保存标注统一设定。"""
     return settings.save_annotation_config(payload)
+
+
+# -- 设置：图像生成 --------------------------------------------------------
+@app.get("/api/settings/generation")
+def get_generation_settings() -> dict[str, Any]:
+    """返回当前图像生成参考图。"""
+    return settings.get_generation_config()
+
+
+@app.put("/api/settings/generation/reference-image/{image_id}")
+def update_generation_reference_image(
+    image_id: str, service: DatasetService = Depends(get_service)
+) -> dict[str, Any]:
+    """将图片库中的指定图片设为图像生成参考图。"""
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    path = getattr(image, "image_path", "") or ""
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="图片文件不存在")
+    return settings.save_generation_reference(
+        image.id, path, image.title or image.id
+    )
 
 
 # -- Dashboard --------------------------------------------------------------
@@ -386,6 +428,91 @@ def create_image(
         return to_jsonable(service.create_image(create))
     except ServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+_ALLOWED_UPLOAD_EXTS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".bmp",
+    ".gif",
+    ".tiff",
+    ".tif",
+}
+
+
+@app.post("/api/images/upload", status_code=201)
+async def upload_images(
+    files: list[UploadFile] = File(...),
+    group_id: str | None = Form(default=None),
+    tags: str | None = Form(default=None),
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    """批量上传图片文件（支持整目录）。
+
+    保存文件字节到 ``workspace/images`` 并登记为图片资源。前端可一次性
+    提交一个目录下的多张图片，逐个解析尺寸、去重登记，返回成功列表与
+    失败明细。
+    """
+    group = (group_id or "").strip() or None
+    if group is not None:
+        exists = any(g.id == group for g in service.list_image_groups())
+        if not exists:
+            raise HTTPException(status_code=400, detail=f"分组不存在: {group}")
+    tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+
+    _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    created: list[Any] = []
+    errors: list[dict[str, str]] = []
+    for upload in files:
+        name = upload.filename or "image"
+        display = Path(name).name
+        ext = Path(name).suffix.lower()
+        if ext not in _ALLOWED_UPLOAD_EXTS:
+            errors.append({"file": display, "error": "不支持的文件类型"})
+            continue
+        try:
+            data = await upload.read()
+        finally:
+            await upload.close()
+        if not data:
+            errors.append({"file": display, "error": "文件为空"})
+            continue
+        try:
+            with PILImage.open(BytesIO(data)) as probe:
+                oriented = ImageOps.exif_transpose(probe)
+                width, height = oriented.width, oriented.height
+        except OSError:
+            errors.append({"file": display, "error": "无法解析为图片"})
+            continue
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        output = _IMAGE_DIR / f"upload-{uuid4().hex[:16]}{ext}"
+        output.write_bytes(data)
+        try:
+            stored_path = output.relative_to(Path.cwd())
+        except ValueError:
+            stored_path = output
+        relative_path = str(stored_path).replace("\\", "/")
+        title = Path(display).stem or display
+        try:
+            image = service.create_image(
+                ImageCreate(
+                    title=title,
+                    group_id=group,
+                    tags=list(tag_list),
+                    width=width,
+                    height=height,
+                    path=relative_path,
+                )
+            )
+            image = service.update_image(image.id, sha256=digest)
+        except ServiceError as exc:
+            output.unlink(missing_ok=True)
+            errors.append({"file": display, "error": str(exc)})
+            continue
+        created.append(image)
+    return {"created": to_jsonable(created), "errors": errors}
 
 
 @app.get("/api/images/{image_id}")
@@ -540,6 +667,85 @@ def crop_image(
         output.unlink(missing_ok=True)
         raise
     return {"image": to_jsonable(updated), "previous_path": previous_path, "output_path": relative_path}
+
+
+@app.post("/api/images/{image_id}/crop-resize")
+def crop_resize_image(
+    image_id: str,
+    payload: dict[str, Any],
+    service: DatasetService = Depends(get_service),
+) -> Any:
+    """按用户手动选择的裁剪框裁切原图，并压缩/缩放到目标尺寸。
+
+    ``x/y/width/height`` 为原图像素坐标的裁剪框（宽高比应与目标尺寸一致），
+    ``target_width/target_height`` 为最终输出尺寸。裁剪后统一用 LANCZOS
+    重采样到目标尺寸，从而实现「先按目标比例裁剪，再压缩到目标大小」。
+    """
+    try:
+        image = service.get_image(image_id)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    source_path = Path(image.image_path or "")
+    previous_path = image.image_path
+    if not source_path.is_file():
+        raise HTTPException(status_code=400, detail="图片文件不存在")
+    try:
+        with PILImage.open(source_path) as loaded:
+            source = ImageOps.exif_transpose(loaded).convert("RGB")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail="图片文件无法读取") from exc
+    try:
+        left = int(payload["x"])
+        top = int(payload["y"])
+        width = int(payload["width"])
+        height = int(payload["height"])
+        target_width = int(payload["target_width"])
+        target_height = int(payload["target_height"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="裁剪或目标尺寸格式错误") from exc
+    if target_width < 64 or target_height < 64:
+        raise HTTPException(status_code=400, detail="目标尺寸至少需要 64×64 像素")
+    if width < 1 or height < 1:
+        raise HTTPException(status_code=400, detail="裁剪范围无效")
+    if left < 0 or top < 0 or left + width > source.width or top + height > source.height:
+        raise HTTPException(status_code=400, detail="裁剪范围超出原图")
+    cropped = source.crop((left, top, left + width, top + height))
+    if (cropped.width, cropped.height) != (target_width, target_height):
+        cropped = cropped.resize(
+            (target_width, target_height),
+            resample=PILImage.Resampling.LANCZOS,
+        )
+    _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    output = _IMAGE_DIR / f"crop-resize-{uuid4().hex[:16]}.jpg"
+    cropped.save(output, format="JPEG", quality=95, optimize=True)
+    try:
+        stored_path = output.relative_to(Path.cwd())
+    except ValueError:
+        stored_path = output
+    relative_path = str(stored_path).replace("\\", "/")
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()[:16]
+    tags = list(
+        dict.fromkeys(
+            [*image.tags, "人工裁剪", f"裁剪尺寸:{target_width}x{target_height}"]
+        )
+    )
+    try:
+        updated = service.update_image(
+            image_id,
+            image_path=relative_path,
+            width=cropped.width,
+            height=cropped.height,
+            sha256=digest,
+            tags=tags,
+        )
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    return {
+        "image": to_jsonable(updated),
+        "previous_path": previous_path,
+        "output_path": relative_path,
+    }
 
 
 def _compress_then_center_crop(
@@ -1475,7 +1681,16 @@ def get_export_options() -> dict[str, Any]:
         }
         for key, cfg in export_service.TRAINING_PRESETS.items()
     ]
-    return {"base_models": export_service.BASE_MODELS, "presets": presets}
+    base_models = [
+        {
+            **model,
+            "memory_defaults": export_service.base_model_memory_defaults(
+                model["value"]
+            ),
+        }
+        for model in export_service.BASE_MODELS
+    ]
+    return {"base_models": base_models, "presets": presets}
 
 
 @app.get("/api/aitoolkit/nodes")
@@ -1588,6 +1803,29 @@ def refresh_training_task(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/training-tasks/{task_id}/stop")
+def stop_training_task(
+    task_id: str,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    try:
+        return to_jsonable(scheduler.stop_task(task_id))
+    except SchedulerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/training-tasks/{task_id}")
+def delete_training_task(
+    task_id: str,
+    scheduler: TrainingScheduler = Depends(get_training_scheduler),
+) -> dict[str, Any]:
+    try:
+        scheduler.delete_task(task_id)
+    except SchedulerError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": task_id}
+
+
 @app.post("/api/datasets/{dataset_id}/export")
 def export_dataset(
     dataset_id: str,
@@ -1659,6 +1897,14 @@ def export_dataset(
             [str(p) for p in sample_prompts] if sample_prompts else None
         ),
         only_captioned=bool(payload.get("only_captioned", True)),
+        gradient_checkpointing=bool(payload.get("gradient_checkpointing", True)),
+        quantize=bool(payload.get("quantize", True)),
+        quantize_te=(
+            bool(payload["quantize_te"])
+            if payload.get("quantize_te") is not None
+            else None
+        ),
+        low_vram=bool(payload.get("low_vram", False)),
     )
 
     data, filename, count = export_service.build_export_zip(ds.name, images, opts)

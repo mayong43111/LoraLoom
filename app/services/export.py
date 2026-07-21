@@ -21,6 +21,7 @@ BASE_MODELS: list[dict[str, str]] = [
     {"value": "Qwen/Qwen-Image-2512", "label": "Qwen-Image-2512（推荐）"},
     {"value": "Qwen/Qwen-Image", "label": "Qwen-Image（基础版）"},
     {"value": "krea/Krea-2-Raw", "label": "Krea-2-Raw（LoRA 训练底模）"},
+    {"value": "Tongyi-MAI/Z-Image", "label": "Z-Image（LoRA 训练底模）"},
 ]
 
 _MODEL_PROFILES: dict[str, dict[str, Any]] = {
@@ -34,6 +35,14 @@ _MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "guidance_scale": 3.5,
         "filename_family": "krea2",
     },
+    "tongyi-mai/z-image": {
+        "family": "Z-Image",
+        "arch": "zimage",
+        "quantize_te": True,
+        "timestep_type": "weighted",
+        "sample_steps": 30,
+        "filename_family": "z_image",
+    },
 }
 
 
@@ -46,6 +55,21 @@ def _model_profile(base_model: str) -> dict[str, Any]:
             "filename_family": "qwen_image",
         },
     )
+
+
+def base_model_memory_defaults(base_model: str) -> dict[str, Any]:
+    """底模在显存/速度设置上的默认值（供前端初始化开关，参照 ai-toolkit）。
+
+    默认沿用「省显存」侧：梯度检查点与量化开启、低显存关闭。显存充足时可
+    在前端关闭这些开关以显存换速度。
+    """
+    profile = _model_profile(base_model)
+    return {
+        "gradient_checkpointing": True,
+        "quantize": True,
+        "quantize_te": bool(profile.get("quantize_te")),
+        "low_vram": False,
+    }
 
 # 训练预设：人物形象偏过拟合（高 rank、更多步数），风格避免过拟合。
 TRAINING_PRESETS: dict[str, dict[str, Any]] = {
@@ -109,6 +133,12 @@ class ExportOptions:
     resolution: list[int] | None = None
     sample_prompts: list[str] | None = None
     only_captioned: bool = True
+    # 显存 / 速度权衡（对应 ai-toolkit 设置，默认保持省显存行为）。
+    # 显存充足时关闭以显存换速度；这些默认值保证不改变既有导出结果。
+    gradient_checkpointing: bool = True
+    quantize: bool = True
+    quantize_te: bool | None = None  # None 表示沿用底模 profile 默认
+    low_vram: bool = False
 
 
 def _slugify(name: str) -> str:
@@ -203,9 +233,18 @@ def build_aitoolkit_config(
     def q(value: str) -> str:
         return json.dumps(value, ensure_ascii=False)
 
-    quantize_te_line = (
-        "        quantize_te: true\n" if model_profile.get("quantize_te") else ""
+    # 显存 / 速度：默认沿用底模 profile，显式设置时覆盖。
+    effective_quantize_te = (
+        opts.quantize_te
+        if opts.quantize_te is not None
+        else bool(model_profile.get("quantize_te"))
     )
+    gradient_checkpointing = "true" if opts.gradient_checkpointing else "false"
+    quantize = "true" if opts.quantize else "false"
+    quantize_te_line = (
+        "        quantize_te: true\n" if effective_quantize_te else ""
+    )
+    low_vram_line = "        low_vram: true\n" if opts.low_vram else ""
     timestep_type_line = (
         f"        timestep_type: {model_profile['timestep_type']}\n"
         if model_profile.get("timestep_type")
@@ -248,7 +287,7 @@ config:
         gradient_accumulation_steps: 1
         train_unet: true
         train_text_encoder: false
-        gradient_checkpointing: true
+        gradient_checkpointing: {gradient_checkpointing}
         noise_scheduler: flowmatch
 {timestep_type_line}        optimizer: adamw8bit
         lr: {lr}
@@ -256,8 +295,8 @@ config:
       model:
         name_or_path: {q(opts.base_model)}
         arch: {model_profile['arch']}
-        quantize: true
-{quantize_te_line}      sample:
+        quantize: {quantize}
+{quantize_te_line}{low_vram_line}      sample:
         sampler: flowmatch
         sample_every: {save_every}
         width: 1024

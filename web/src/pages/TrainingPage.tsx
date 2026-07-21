@@ -5,6 +5,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Progress,
   Space,
   Switch,
   Table,
@@ -63,6 +64,22 @@ export function TrainingPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const active = tasks.filter(
+        (task) => task.remote_job_id && !TERMINAL_STATUSES.has(task.status),
+      );
+      if (!active.length) return;
+      void Promise.all(active.map((task) => api.refreshTrainingTask(task.id))).then(
+        (updated) => {
+          const byId = new Map(updated.map((task) => [task.id, task]));
+          setTasks((current) => current.map((task) => byId.get(task.id) ?? task));
+        },
+      );
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [tasks]);
+
   const openNodeModal = (node?: AiToolkitNode) => {
     setEditingNode(node ?? null);
     form.setFieldsValue(
@@ -119,6 +136,28 @@ export function TrainingPage() {
       setTasks((current) =>
         current.map((item) => (item.id === updated.id ? updated : item)),
       );
+    } catch (err) {
+      message.error((err as Error).message);
+    }
+  };
+
+  const stopTask = async (task: TrainingTask) => {
+    try {
+      const updated = await api.stopTrainingTask(task.id);
+      setTasks((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      message.success("已发送停止请求");
+    } catch (err) {
+      message.error((err as Error).message);
+    }
+  };
+
+  const deleteTask = async (task: TrainingTask) => {
+    try {
+      await api.deleteTrainingTask(task.id);
+      setTasks((current) => current.filter((item) => item.id !== task.id));
+      message.success("任务已删除");
     } catch (err) {
       message.error((err as Error).message);
     }
@@ -209,6 +248,26 @@ export function TrainingPage() {
               render: (value?: string) => value || "-",
             },
             {
+              title: "进度",
+              width: 260,
+              render: (_, task) => {
+                const total = task.total_steps || task.options.steps || 0;
+                const percent = total
+                  ? Math.min(100, Math.round((task.step / total) * 100))
+                  : 0;
+                return (
+                  <div>
+                    <Progress percent={percent} size="small" status={task.status === "error" ? "exception" : undefined} />
+                    <Typography.Text type="secondary">
+                      {task.step}/{total || "-"}
+                      {task.speed_string ? ` · ${task.speed_string}` : ""}
+                      {task.info ? ` · ${task.info}` : ""}
+                    </Typography.Text>
+                  </div>
+                );
+              },
+            },
+            {
               title: "创建时间",
               dataIndex: "created_at",
               width: 170,
@@ -230,6 +289,40 @@ export function TrainingPage() {
                     同步状态
                   </Button>
                 ),
+            },
+            {
+              title: "操作",
+              width: 150,
+              render: (_, task) => (
+                <Space>
+                  <Popconfirm
+                    title="停止该训练任务？"
+                    okText="停止"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void stopTask(task)}
+                  >
+                    <Button
+                      size="small"
+                      disabled={
+                        !task.remote_job_id ||
+                        TERMINAL_STATUSES.has(task.status)
+                      }
+                    >
+                      停止
+                    </Button>
+                  </Popconfirm>
+                  <Popconfirm
+                    title="删除该任务？将一并删除远端 Job。"
+                    okText="删除"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void deleteTask(task)}
+                  >
+                    <Button size="small" danger>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              ),
             },
           ]}
         />

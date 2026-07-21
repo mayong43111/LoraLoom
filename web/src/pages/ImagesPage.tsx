@@ -39,9 +39,11 @@ import {
   EditOutlined,
   EyeOutlined,
   FolderOutlined,
+  FolderAddOutlined,
   HomeOutlined,
   MoreOutlined,
   PictureOutlined,
+  PushpinOutlined,
   ReloadOutlined,
   ExpandOutlined,
   SwapOutlined,
@@ -69,7 +71,7 @@ import "react-image-crop/dist/ReactCrop.css";
 const UNGROUPED_NAME = "未分组";
 const ROOT_VALUE = "__root__";
 
-const CROP_SIZE_PRESETS = [
+export const CROP_SIZE_PRESETS = [
   { label: "512 × 512 · 1:1 方图", value: "512x512", width: 512, height: 512 },
   { label: "768 × 768 · 1:1 方图", value: "768x768", width: 768, height: 768 },
   { label: "1024 × 1024 · 1:1 方图", value: "1024x1024", width: 1024, height: 1024 },
@@ -77,6 +79,10 @@ const CROP_SIZE_PRESETS = [
   { label: "1024 × 768 · 4:3 横图", value: "1024x768", width: 1024, height: 768 },
   { label: "1024 × 1536 · 2:3 竖图", value: "1024x1536", width: 1024, height: 1536 },
   { label: "1536 × 1024 · 3:2 横图", value: "1536x1024", width: 1536, height: 1024 },
+  { label: "1536 × 1536 · 1:1 方图", value: "1536x1536", width: 1536, height: 1536 },
+  { label: "2048 × 2048 · 1:1 方图", value: "2048x2048", width: 2048, height: 2048 },
+  { label: "1536 × 2048 · 3:4 竖图", value: "1536x2048", width: 1536, height: 2048 },
+  { label: "2048 × 1536 · 4:3 横图", value: "2048x1536", width: 2048, height: 1536 },
 ];
 
 // -- 图片详情（仅属性；硬指标只读） -----------------------------------------
@@ -800,6 +806,161 @@ function UploadImageModal({
   );
 }
 
+// -- 上传整个目录弹窗 -------------------------------------------------------
+const DIRECTORY_IMAGE_EXTS = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".bmp",
+  ".gif",
+  ".tiff",
+  ".tif",
+];
+
+function isImageFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return DIRECTORY_IMAGE_EXTS.some((ext) => lower.endsWith(ext));
+}
+
+function UploadDirectoryModal({
+  open,
+  onClose,
+  groups,
+  defaultGroupId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  groups: ImageGroup[];
+  defaultGroupId: string | null;
+  onCreated: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      form.setFieldsValue({ group_id: defaultGroupId ?? undefined, tags: [] });
+      setFileList([]);
+    }
+  }, [open, defaultGroupId, form]);
+
+  const submit = async () => {
+    const values = await form.validateFields();
+    const files = fileList
+      .map((item) => item.originFileObj as File | undefined)
+      .filter((file): file is File => Boolean(file));
+    if (files.length === 0) {
+      message.warning("请先选择包含图片的目录");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await api.uploadImages({
+        files,
+        group_id: values.group_id ?? null,
+        tags: values.tags ?? [],
+      });
+      const okCount = res.created.length;
+      const errCount = res.errors.length;
+      if (okCount > 0) {
+        message.success(
+          `成功上传 ${okCount} 张图片${errCount ? `，${errCount} 张失败` : ""}`,
+        );
+      } else {
+        message.error(
+          errCount ? `全部 ${errCount} 张上传失败` : "没有可上传的图片",
+        );
+      }
+      if (errCount > 0) {
+        const preview = res.errors
+          .slice(0, 5)
+          .map((e) => `${e.file}：${e.error}`)
+          .join("\n");
+        Modal.warning({
+          title: `${errCount} 个文件未能上传`,
+          content: (
+            <div style={{ whiteSpace: "pre-wrap" }}>
+              {preview}
+              {errCount > 5 ? `\n… 其余 ${errCount - 5} 个略` : ""}
+            </div>
+          ),
+        });
+      }
+      onCreated();
+      if (okCount > 0) {
+        form.resetFields();
+        setFileList([]);
+        onClose();
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const imageCount = fileList.length;
+
+  return (
+    <Modal
+      title="上传目录"
+      open={open}
+      onOk={submit}
+      okText={imageCount > 0 ? `上传 ${imageCount} 张` : "上传"}
+      confirmLoading={submitting}
+      onCancel={onClose}
+      destroyOnClose
+      width={560}
+    >
+      <Form form={form} layout="vertical" preserve={false}>
+        <Form.Item label="选择目录" tooltip="选择本地文件夹，其中的图片将被批量上传">
+          <Upload
+            directory
+            multiple
+            accept="image/*"
+            beforeUpload={() => false}
+            fileList={fileList}
+            onChange={({ fileList: next }) =>
+              setFileList(next.filter((item) => isImageFileName(item.name)))
+            }
+            onRemove={(file) =>
+              setFileList((prev) => prev.filter((item) => item.uid !== file.uid))
+            }
+          >
+            <Button icon={<FolderAddOutlined />}>选择本地目录</Button>
+          </Upload>
+        </Form.Item>
+        {imageCount > 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`已识别 ${imageCount} 张图片，将全部上传到所选分组`}
+          />
+        ) : null}
+        <Form.Item name="group_id" label="所属分组">
+          <Select
+            allowClear
+            placeholder="选择分组（可留空）"
+            options={groups.map((g) => ({ value: g.id, label: g.name }))}
+          />
+        </Form.Item>
+        <Form.Item name="tags" label="统一标签">
+          <Select
+            mode="tags"
+            placeholder="为本次上传的所有图片添加标签（可留空）"
+            tokenSeparators={[","]}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
 // -- 编辑基本信息弹窗（仅名称、标签；分辨率等硬指标不可编辑） ---------------
 function EditImageModal({
   image,
@@ -1163,6 +1324,7 @@ export function ImagesPage() {
   const [selected, setSelected] = useState<ImageModel | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [dirUploadOpen, setDirUploadOpen] = useState(false);
   const [toolsModalOpen, setToolsModalOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolDefinition | null>(null);
   const [toolsSelection, setToolsSelection] = useState<ToolSelection | undefined>(
@@ -1185,6 +1347,7 @@ export function ImagesPage() {
     () => api.listImages(filter),
     [filter.tag, filter.keyword],
   );
+  const generationState = useAsync(() => api.getGenerationConfig(), []);
   const images = imagesState.data ?? [];
 
   const patch = (part: Partial<ImageFilterParams>) =>
@@ -1330,6 +1493,17 @@ export function ImagesPage() {
     refreshAll();
   };
 
+  const setGenerationReference = async () => {
+    if (selectedRowKeys.length !== 1) return;
+    try {
+      const config = await api.setGenerationReferenceImage(selectedRowKeys[0]);
+      generationState.refetch();
+      message.success(`已设为 Z-Image 参考图：${config.reference_image_title}`);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "设置参考图失败");
+    }
+  };
+
   // 打开「工具集合」：selection 决定显示的工具形态，target 决定作用对象。
   const openTools = (
     selection: ToolSelection | undefined,
@@ -1355,6 +1529,12 @@ export function ImagesPage() {
             </Button>
             <Button type="primary" onClick={() => setUploadModalOpen(true)}>
               上传图片
+            </Button>
+            <Button
+              icon={<FolderAddOutlined />}
+              onClick={() => setDirUploadOpen(true)}
+            >
+              上传目录
             </Button>
             <Button
               icon={<EyeOutlined />}
@@ -1389,6 +1569,8 @@ export function ImagesPage() {
       <Space wrap style={{ marginBottom: 16 }}>
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           style={{ width: 160 }}
           placeholder="标签"
           value={filter.tag ?? undefined}
@@ -1435,6 +1617,15 @@ export function ImagesPage() {
           >
             压缩并裁剪
           </Button>
+          {selectedRowKeys.length === 1 && (
+            <Button
+              size="small"
+              icon={<PushpinOutlined />}
+              onClick={setGenerationReference}
+            >
+              设为 Z-Image 参考图
+            </Button>
+          )}
           <Button
             size="small"
             icon={<ToolOutlined />}
@@ -1536,6 +1727,13 @@ export function ImagesPage() {
         open={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
         groups={groups}
+        onCreated={refreshAll}
+      />
+      <UploadDirectoryModal
+        open={dirUploadOpen}
+        onClose={() => setDirUploadOpen(false)}
+        groups={groups}
+        defaultGroupId={currentGroupId}
         onCreated={refreshAll}
       />
       <EditImageModal

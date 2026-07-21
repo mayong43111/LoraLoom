@@ -24,6 +24,7 @@ function TrainingCurationTool(props) {
   const [groupId, setGroupId] = React.useState(initialGroup || null);
   const [selected, setSelected] = React.useState({});
   const [assignedCategory, setAssignedCategory] = React.useState({});
+  const [categoryDefinitions, setCategoryDefinitions] = React.useState([]);
   const [showMode, setShowMode] = React.useState("recommended");
   const [categoryFilter, setCategoryFilter] = React.useState("all");
   const [targetKind, setTargetKind] = React.useState("new_group");
@@ -67,6 +68,9 @@ function TrainingCurationTool(props) {
         setResult(data);
         setSelected(next);
         setAssignedCategory(assigned);
+        setCategoryDefinitions(data.breakdown.map(function (item) {
+          return Object.assign({}, item, { custom: false });
+        }));
         setCategoryFilter(data.breakdown.length ? data.breakdown[0].id : "all");
         if (!preserveTargetName) {
           setTargetName(name + "_" + (template === "identity" ? "人物形象训练" : "动作训练"));
@@ -86,6 +90,49 @@ function TrainingCurationTool(props) {
   const selectedIds = result
     ? result.items.filter(function (item) { return selected[item.id]; }).map(function (item) { return item.id; })
     : [];
+
+  function categoryLabel(categoryId) {
+    const definition = categoryDefinitions.find(function (item) { return item.id === categoryId; });
+    return definition ? definition.name : categoryName(categoryId);
+  }
+
+  function updateCategory(categoryId, patch) {
+    setCategoryDefinitions(function (previous) {
+      return previous.map(function (item) {
+        return item.id === categoryId ? Object.assign({}, item, patch) : item;
+      });
+    });
+  }
+
+  function addCategory() {
+    const customCount = categoryDefinitions.filter(function (item) { return item.custom; }).length;
+    const id = "custom_" + Date.now().toString(36) + "_" + customCount;
+    setCategoryDefinitions(function (previous) {
+      return previous.concat([{ id: id, name: "自定义动作 " + (customCount + 1), target: 10, available: result ? result.eligible : 0, recommended: 0, custom: true }]);
+    });
+    setCategoryFilter(id);
+  }
+
+  function removeCategory(categoryId) {
+    setCategoryDefinitions(function (previous) {
+      return previous.filter(function (item) { return item.id !== categoryId; });
+    });
+    setSelected(function (previous) {
+      const next = Object.assign({}, previous);
+      Object.keys(assignedCategory).forEach(function (imageId) {
+        if (assignedCategory[imageId] === categoryId) next[imageId] = false;
+      });
+      return next;
+    });
+    setAssignedCategory(function (previous) {
+      const next = Object.assign({}, previous);
+      Object.keys(next).forEach(function (imageId) {
+        if (next[imageId] === categoryId) delete next[imageId];
+      });
+      return next;
+    });
+    if (categoryFilter === categoryId) setCategoryFilter("all");
+  }
 
   function targetPayload(suffix) {
     if (targetKind === "group") return { kind: "group", group_id: targetGroupId };
@@ -180,7 +227,7 @@ function TrainingCurationTool(props) {
           h(Tag, { style: { margin: 0 } }, item.face),
           item.shot !== "未知" ? h(Tag, { style: { margin: 0 } }, item.shot) : null,
           h(Tag, { color: item.quality >= 0.85 ? "green" : "orange", style: { margin: 0 } }, "质量 " + Math.round(item.quality * 100)),
-          (assignedCategory[item.id] || item.category) ? h(Tag, { color: "cyan", style: { margin: 0 } }, categoryName(assignedCategory[item.id] || item.category)) : null,
+          (assignedCategory[item.id] || item.category) ? h(Tag, { color: "cyan", style: { margin: 0 } }, categoryLabel(assignedCategory[item.id] || item.category)) : null,
         ),
         h(Text, { type: "secondary", style: { display: "block", fontSize: 11, marginTop: 5 } }, item.width + "×" + item.height + " · " + (item.reasons.join("、") || "多样性补充")),
       ),
@@ -210,8 +257,9 @@ function TrainingCurationTool(props) {
 
   function renderReview() {
     const currentGroup = overview && overview.groups.find(function (group) { return group.id === groupId; });
+    const activeDefinition = categoryDefinitions.find(function (item) { return item.id === categoryFilter; });
     const inCategory = result.items.filter(function (item) {
-      return categoryFilter === "all" || item.category === categoryFilter || (item.categories || []).indexOf(categoryFilter) >= 0;
+      return categoryFilter === "all" || (activeDefinition && activeDefinition.custom && item.eligible) || item.category === categoryFilter || (item.categories || []).indexOf(categoryFilter) >= 0;
     });
     const chosen = result.items.filter(function (item) {
       return selected[item.id] && (categoryFilter === "all" || assignedCategory[item.id] === categoryFilter);
@@ -236,29 +284,44 @@ function TrainingCurationTool(props) {
           h(Text, { type: "secondary", style: { fontSize: 12 } }, "当前分组"),
           h(Title, { level: 5, style: { margin: "3px 0 12px" } }, currentGroup ? currentGroup.name : "分组要求"),
           h("div", { className: "curation-summary" },
-            [["原图", result.total], ["基础可用", result.eligible], ["目标配额", result.target], ["当前入选", selectedIds.length]].map(function (entry) {
+            [["原图", result.total], ["基础可用", result.eligible], ["目标配额", categoryDefinitions.reduce(function (sum, item) { return sum + item.target; }, 0)], ["当前入选", selectedIds.length]].map(function (entry) {
               return h("div", { key: entry[0] }, h(Text, { type: "secondary" }, entry[0]), h(Text, { strong: true }, entry[1]));
             }),
           ),
           h(Text, { strong: true, style: { display: "block", margin: "16px 0 8px" } }, "分组要求"),
-          h("div", { className: "curation-category-list" }, result.breakdown.map(function (item) {
-        const current = result.items.filter(function (image) { return assignedCategory[image.id] === item.id && selected[image.id]; }).length;
+          h("div", { className: "curation-category-list" }, categoryDefinitions.map(function (item) {
+            const current = result.items.filter(function (image) { return assignedCategory[image.id] === item.id && selected[image.id]; }).length;
             const shortfall = Math.max(0, item.target - current);
-            return h("button", { key: item.id, type: "button", onClick: function () { setCategoryFilter(item.id); }, className: "curation-category" + (categoryFilter === item.id ? " is-active" : "") },
+            return h("div", { key: item.id, onClick: function () { setCategoryFilter(item.id); }, className: "curation-category" + (categoryFilter === item.id ? " is-active" : "") },
               h(Flex, { justify: "space-between", align: "center" },
-                h(Text, { strong: true }, item.name),
+                h(Input, {
+                  value: item.name,
+                  size: "small",
+                  "aria-label": "分组名称",
+                  onClick: function (event) { event.stopPropagation(); },
+                  onChange: function (event) { updateCategory(item.id, { name: event.target.value }); },
+                  style: { width: 165, fontWeight: 600 },
+                }),
                 h(Text, { strong: true, type: shortfall ? "warning" : "success" }, current + "/" + item.target),
               ),
-              h(Text, { type: "secondary", style: { fontSize: 12 } }, "可用 " + item.available + (shortfall ? " · 还差 " + shortfall : " · 已满足")),
+              h(Flex, { justify: "space-between", align: "center", style: { marginTop: 7 } },
+                h(Text, { type: "secondary", style: { fontSize: 12 } }, "可用 " + (item.custom ? result.eligible : item.available) + (shortfall ? " · 还差 " + shortfall : " · 已满足")),
+                h(Space, { size: 4, onClick: function (event) { event.stopPropagation(); } },
+                  h(Text, { type: "secondary", style: { fontSize: 12 } }, "目标"),
+                  h(InputNumber, { min: 0, max: result.eligible, size: "small", value: item.target, onChange: function (value) { updateCategory(item.id, { target: typeof value === "number" ? value : 0 }); }, style: { width: 68 } }),
+                  item.custom ? h(Button, { size: "small", type: "text", danger: true, icon: h(icons.DeleteOutlined), title: "删除分组", onClick: function () { removeCategory(item.id); } }) : null,
+                ),
+              ),
             );
           })),
+          h(Button, { block: true, icon: h(icons.PlusOutlined), style: { marginTop: 10 }, onClick: addCategory }, "添加分组"),
           h(Button, { block: true, style: { marginTop: 10 }, onClick: function () { setCategoryFilter("all"); }, type: categoryFilter === "all" ? "primary" : "default" }, "查看全部"),
         ),
         h("main", { className: "curation-pools" },
           h(Flex, { justify: "space-between", align: "center", gap: 12, wrap: true, className: "curation-pools-header" },
             h("div", null,
-              h(Title, { level: 4, style: { margin: 0 } }, categoryFilter === "all" ? "全部类别" : categoryName(categoryFilter)),
-              h(Text, { type: "secondary" }, "点击图片可在入选与候选之间移动"),
+              h(Title, { level: 4, style: { margin: 0 } }, categoryFilter === "all" ? "全部类别" : categoryLabel(categoryFilter)),
+              h(Text, { type: "secondary" }, activeDefinition && activeDefinition.custom ? "自定义分组展示全部基础可用图片；点击图片进行人工分配" : "点击图片可在入选与候选之间移动"),
             ),
             h(Tag, { color: "blue", style: { margin: 0 } }, "整组已选 " + selectedIds.length + " 张"),
           ),
@@ -276,7 +339,7 @@ function TrainingCurationTool(props) {
     title: "训练集策展",
     extra: result ? h(Space, null, h(Button, { onClick: function () { setResult(null); } }, "返回分组"), h(Button, { type: "primary", onClick: finish }, "完成")) : null,
   },
-  h("style", null, ".curation-workbench{display:grid;grid-template-columns:260px minmax(0,1fr);gap:16px;align-items:start}.curation-requirements{position:sticky;top:0;border-right:1px solid color-mix(in srgb,currentColor 18%,transparent);padding:4px 16px 4px 2px;max-height:calc(100vh - 190px);overflow:auto}.curation-summary{display:grid;grid-template-columns:1fr 1fr;gap:7px}.curation-summary>div{display:flex;flex-direction:column;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:6px;padding:7px 9px}.curation-category-list{display:flex;flex-direction:column;gap:7px}.curation-category{width:100%;color:inherit;text-align:left;padding:9px 10px;border-radius:6px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:color-mix(in srgb,currentColor 5%,transparent);cursor:pointer}.curation-category.is-active{border-color:#1677ff;background:rgba(22,119,255,.18)}.curation-pools{min-width:0;max-height:calc(100vh - 185px);overflow:auto;padding-right:4px}.curation-pools-header{position:sticky;top:0;z-index:2;padding:3px 0 10px;backdrop-filter:blur(10px);background:color-mix(in srgb,currentColor 5%,transparent)}.curation-pool{border-top:1px solid color-mix(in srgb,currentColor 18%,transparent);padding-top:12px;margin-bottom:18px}.curation-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}.curation-grid>button>div:first-child{height:190px!important}@media(max-width:800px){.curation-workbench{grid-template-columns:1fr}.curation-requirements{position:static;max-height:none;border-right:0;border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent);padding:0 0 12px}.curation-category-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.curation-pools{max-height:none}.curation-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}"),
+  h("style", null, ".curation-workbench{display:grid;grid-template-columns:320px minmax(0,1fr);gap:18px;align-items:start}.curation-requirements{position:sticky;top:0;border-right:1px solid color-mix(in srgb,currentColor 18%,transparent);padding:4px 16px 4px 2px;max-height:calc(100vh - 190px);overflow:auto}.curation-summary{display:grid;grid-template-columns:1fr 1fr;gap:7px}.curation-summary>div{display:flex;flex-direction:column;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:6px;padding:7px 9px}.curation-category-list{display:flex;flex-direction:column;gap:7px}.curation-category{width:100%;color:inherit;text-align:left;padding:9px 10px;border-radius:6px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:color-mix(in srgb,currentColor 5%,transparent);cursor:pointer}.curation-category.is-active{border-color:#1677ff;background:rgba(22,119,255,.18)}.curation-pools{min-width:0;max-height:calc(100vh - 185px);overflow:auto;padding-right:4px}.curation-pools-header{position:sticky;top:0;z-index:2;padding:3px 0 10px;backdrop-filter:blur(10px);background:color-mix(in srgb,currentColor 5%,transparent)}.curation-pool{border-top:1px solid color-mix(in srgb,currentColor 18%,transparent);padding-top:12px;margin-bottom:18px}.curation-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}.curation-grid>button>div:first-child{height:360px!important}@media(max-width:800px){.curation-workbench{grid-template-columns:1fr}.curation-requirements{position:static;max-height:none;border-right:0;border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent);padding:0 0 12px}.curation-category-list{display:grid;grid-template-columns:1fr}.curation-pools{max-height:none}.curation-grid{grid-template-columns:1fr}.curation-grid>button>div:first-child{height:min(62vh,520px)!important}}"),
   h(Spin, { spinning: busy, tip: result ? "正在处理图片" : "正在分析分组" }, result ? renderReview() : renderOverview()));
 }
 

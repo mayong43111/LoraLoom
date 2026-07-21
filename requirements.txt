@@ -2,6 +2,8 @@
 # 说明：前端为 web/ 下的 React 应用；本文件仅列出 Python 后端依赖。
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+# FastAPI 处理 multipart/form-data（批量上传图片、上传目录）所需。
+python-multipart==0.0.32
 # 抽帧插件（video.frame-extraction）解码与图像质量计算依赖。
 # imageio-ffmpeg 自带静态 ffmpeg 二进制，无需系统预装 FFmpeg。
 imageio-ffmpeg==0.6.0

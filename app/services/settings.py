@@ -35,6 +35,12 @@ _DEFAULT_ANNOTATION: dict[str, Any] = {
     "trigger_word": "",
 }
 
+_DEFAULT_GENERATION: dict[str, Any] = {
+    "reference_image_id": "",
+    "reference_image_path": "",
+    "reference_image_title": "",
+}
+
 
 def _read_all() -> dict[str, Any]:
     if not _SETTINGS_PATH.is_file():
@@ -186,6 +192,33 @@ def save_annotation_config(payload: dict[str, Any]) -> dict[str, Any]:
         data["annotation"] = updated
         _write_all(data)
     return get_annotation_config()
+
+
+# -- 生成设定（参考图等） ---------------------------------------------------
+def get_generation_config() -> dict[str, Any]:
+    """返回图像生成相关设定。"""
+    with _LOCK:
+        stored = _read_all().get("generation") or {}
+    return {
+        **_DEFAULT_GENERATION,
+        **{k: v for k, v in stored.items() if k in _DEFAULT_GENERATION},
+    }
+
+
+def save_generation_reference(
+    image_id: str, image_path: str, image_title: str
+) -> dict[str, Any]:
+    """保存由图片库解析并校验过的生成参考图。"""
+    updated = {
+        "reference_image_id": image_id,
+        "reference_image_path": image_path,
+        "reference_image_title": image_title,
+    }
+    with _LOCK:
+        data = _read_all()
+        data["generation"] = updated
+        _write_all(data)
+    return get_generation_config()
 
 
 class LLMError(RuntimeError):
